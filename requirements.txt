@@ -1,0 +1,18 @@
+# UI Framework
+streamlit
+streamlit-extras
+
+# LangChain Ecosystem
+langchain
+langchain-community
+langchain-ollama
+
+# NLP & Retrieval
+rank_bm25
+pypdf
+chromadb
+sentence-transformers
+
+# Environment & Utilities
+python-dotenv
+tiktoken

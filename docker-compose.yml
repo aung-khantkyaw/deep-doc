@@ -1,0 +1,29 @@
+services:
+  # Ollama Service (LLM Engine)
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ./ollama_data:/root/.ollama
+    restart: always
+
+  # DeepDoc Streamlit App
+  deepdoc_app:
+    build: .
+    container_name: deepdoc_ui
+    ports:
+      - "8501:8501"
+    environment:
+      - OLLAMA_BASE_URL=http://ollama:11434
+    depends_on:
+      - ollama
+    volumes:
+      - .:/app
+    stdin_open: true
+    tty: true
+
+networks:
+  default:
+    name: deepdoc-network
