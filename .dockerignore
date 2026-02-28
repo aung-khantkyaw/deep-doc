@@ -1,0 +1,7 @@
+# .dockerignore
+.venv
+__pycache__/
+.env
+ollama_data/
+data/chroma_db/
+.git/

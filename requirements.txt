@@ -6,6 +6,7 @@ streamlit-extras
 langchain
 langchain-community
 langchain-ollama
+langchain-huggingface
 
 # NLP & Retrieval
 rank_bm25
@@ -16,3 +17,6 @@ sentence-transformers
 # Environment & Utilities
 python-dotenv
 tiktoken
+
+# Auth
+bcrypt
