@@ -117,6 +117,7 @@ def get_system_settings() -> dict:
     raw = get_all_settings()
     return {
         "model_name":    raw.get("model_name",    "llama3.1:8b"),
+        "embedding_model": raw.get("embedding_model", "all-MiniLM-L6-v2"),
         "top_k":         int(raw.get("top_k",     "4")),
         "temperature":   float(raw.get("temperature", "0.2")),
         "chunk_size":    int(raw.get("chunk_size", "512")),
@@ -126,12 +127,14 @@ def get_system_settings() -> dict:
 
 def save_system_settings(
     model_name: str,
+    embedding_model: str,
     top_k: int,
     temperature: float,
     chunk_size: int,
     chunk_overlap: int,
 ) -> None:
     update_setting("model_name",    model_name)
+    update_setting("embedding_model", embedding_model)
     update_setting("top_k",         str(top_k))
     update_setting("temperature",   str(temperature))
     update_setting("chunk_size",    str(chunk_size))

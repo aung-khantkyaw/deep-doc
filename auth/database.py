@@ -1,10 +1,18 @@
 """SQLite database layer for users, chat history, and system settings."""
 from __future__ import annotations
 
+import os
 import sqlite3
 from pathlib import Path
 
 DB_PATH = "data/deepdoc.db"
+
+DEFAULT_LLM_MODEL = os.getenv("OLLAMA_MODEL", "llama3.1:8b")
+DEFAULT_EMBEDDING_MODEL = os.getenv("DEFAULT_EMBEDDING_MODEL", "all-MiniLM-L6-v2")
+DEFAULT_TOP_K = os.getenv("TOP_K", "4")
+DEFAULT_TEMPERATURE = os.getenv("TEMPERATURE", "0.2")
+DEFAULT_CHUNK_SIZE = os.getenv("CHUNK_SIZE", "512")
+DEFAULT_CHUNK_OVERLAP = os.getenv("CHUNK_OVERLAP", "80")
 
 # ---------------------------------------------------------------------------
 # Connection
@@ -52,6 +60,7 @@ def init_db() -> None:
             title         TEXT    NOT NULL,
             chroma_dir    TEXT    NOT NULL,
             model_name    TEXT    NOT NULL,
+            embedding_model TEXT  NOT NULL DEFAULT 'all-MiniLM-L6-v2',
             top_k         INTEGER NOT NULL,
             chunk_size    INTEGER NOT NULL,
             chunk_overlap INTEGER NOT NULL,
@@ -84,13 +93,23 @@ def init_db() -> None:
     if "room_id" not in columns:
         cur.execute("ALTER TABLE chat_history ADD COLUMN room_id INTEGER")
 
+    room_columns = [
+        row["name"]
+        for row in cur.execute("PRAGMA table_info(study_rooms)").fetchall()
+    ]
+    if "embedding_model" not in room_columns:
+        cur.execute(
+            "ALTER TABLE study_rooms ADD COLUMN embedding_model TEXT NOT NULL DEFAULT 'all-MiniLM-L6-v2'"
+        )
+
     # Default system settings (INSERT OR IGNORE — never overwrite admin changes)
     defaults = {
-        "model_name":   "llama3.1:8b",
-        "top_k":        "4",
-        "temperature":  "0.2",
-        "chunk_size":   "512",
-        "chunk_overlap": "80",
+        "model_name": DEFAULT_LLM_MODEL,
+        "top_k": DEFAULT_TOP_K,
+        "temperature": DEFAULT_TEMPERATURE,
+        "chunk_size": DEFAULT_CHUNK_SIZE,
+        "chunk_overlap": DEFAULT_CHUNK_OVERLAP,
+        "embedding_model": DEFAULT_EMBEDDING_MODEL,
     }
     for key, val in defaults.items():
         cur.execute(
@@ -288,6 +307,7 @@ def create_study_room(
     title: str,
     chroma_dir: str,
     model_name: str,
+    embedding_model: str,
     top_k: int,
     chunk_size: int,
     chunk_overlap: int,
@@ -297,15 +317,16 @@ def create_study_room(
     cur = conn.execute(
         """
         INSERT INTO study_rooms (
-            user_id, title, chroma_dir, model_name,
+            user_id, title, chroma_dir, model_name, embedding_model,
             top_k, chunk_size, chunk_overlap, temperature
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         (
             user_id,
             title,
             chroma_dir,
             model_name,
+            embedding_model,
             top_k,
             chunk_size,
             chunk_overlap,
@@ -343,7 +364,7 @@ def list_user_study_rooms(user_id: int, limit: int = 50) -> list[sqlite3.Row]:
     rows = conn.execute(
         """
      SELECT r.id, r.title, r.chroma_dir, r.model_name, r.top_k, r.chunk_size, r.chunk_overlap,
-         r.temperature, r.created_at, r.updated_at,
+         r.embedding_model, r.temperature, r.created_at, r.updated_at,
          COUNT(f.id) AS file_count
      FROM study_rooms r
      LEFT JOIN room_files f ON f.room_id = r.id

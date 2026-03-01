@@ -5,18 +5,23 @@ BM25 and vector search results without depending on EnsembleRetriever.
 """
 from __future__ import annotations
 
+import os
 import re
 from typing import Any
 
 from langchain_community.retrievers import BM25Retriever
 from langchain_community.vectorstores import Chroma
 from langchain_huggingface import HuggingFaceEmbeddings
+from langchain_ollama import OllamaEmbeddings
 from langchain_core.callbacks import CallbackManagerForRetrieverRun
 from langchain_core.documents import Document
 from langchain_core.retrievers import BaseRetriever
 
 # Lightweight embedding model — runs fully locally, no API key needed.
-EMBED_MODEL = "all-MiniLM-L6-v2"
+EMBED_MODEL = os.getenv("DEFAULT_EMBEDDING_MODEL", "all-MiniLM-L6-v2")
+OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+OLLAMA_EMBED_MODEL = os.getenv("OLLAMA_EMBED_MODEL", "nomic-embed-text")
+HF_EMBED_MODEL = os.getenv("HF_EMBED_MODEL", "sentence-transformers/all-MiniLM-L6-v2")
 
 
 def _tokenize_for_bm25(text: str) -> list[str]:
@@ -134,6 +139,7 @@ def build_hybrid_retriever(
     top_k: int = 4,
     bm25_weight: float = 0.4,
     vector_weight: float = 0.6,
+    embedding_model: str = EMBED_MODEL,
 ) -> HybridRetriever:
     """Build a hybrid BM25 + vector retriever.
 
@@ -147,12 +153,22 @@ def build_hybrid_retriever(
         top_k: Number of chunks each retriever returns per query.
         bm25_weight: Weight for BM25 results in fusion (0.0 – 1.0).
         vector_weight: Weight for vector results in fusion (0.0 – 1.0).
+        embedding_model: `all-MiniLM-L6-v2` (HF) or `nomic-embed-text` (Ollama).
 
     Returns:
         HybridRetriever ready to invoke with a string query.
     """
     # 1. Vector store (ChromaDB + sentence-transformers)
-    embedding = HuggingFaceEmbeddings(model_name=EMBED_MODEL)
+    if embedding_model == "nomic-embed-text" or embedding_model == OLLAMA_EMBED_MODEL:
+        ollama_model_name = OLLAMA_EMBED_MODEL if embedding_model == "nomic-embed-text" else embedding_model
+        embedding = OllamaEmbeddings(model=ollama_model_name, base_url=OLLAMA_BASE_URL)
+    else:
+        hf_model_name = (
+            HF_EMBED_MODEL
+            if embedding_model == "all-MiniLM-L6-v2"
+            else embedding_model
+        )
+        embedding = HuggingFaceEmbeddings(model_name=hf_model_name)
     vectorstore = Chroma.from_documents(
         documents=chunks,
         embedding=embedding,

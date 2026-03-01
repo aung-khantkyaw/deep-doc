@@ -1,6 +1,6 @@
 # DeepDoc - AI-Powered Document Intelligence — System Document
 
-> Version: 1.0.0 · Date: 2026-03-01  
+> Version: 1.2.1 · Date: 2026-03-01  
 > Local, privacy-first PDF study assistant with hybrid retrieval, study-room timeline, and role-based access.
 
 ---
@@ -25,11 +25,14 @@ Browser (Streamlit)
 app.py
   ├─ Auth Gate (login/register)
   ├─ Sidebar (theme-aware styling, room timeline, app actions)
-  ├─ Upload Settings Panel (admin editable / user read-only)
+  ├─ Setting & Help Page
+  │   ├─ profile/password management
+  │   └─ admin-only Performance + Embedding controls
   ├─ Study Rooms Sidebar Timeline
   │   ├─ select existing room -> restore room chat context
   │   └─ new chat -> upload new file set -> create new room
   ├─ Upload & Process
+  │   ├─ read-only current configuration summary
   │   ├─ save files
   │   ├─ parse + chunk
   │   ├─ build HybridRetriever (BM25 + Vector)
@@ -44,26 +47,26 @@ app.py
 
 auth/database.py -> SQLite (users, rooms, room files, history, settings)
 auth/manager.py  -> auth + bcrypt + typed settings
-engine/retriever.py -> custom BM25 n-gram + vector + weighted RRF
+engine/retriever.py -> custom BM25 n-gram + vector + weighted RRF (+ selectable embedding backend)
 ```
 
 ---
 
 ## 3) Tech Stack
 
-| Layer             | Technology                                 | Notes                           |
-| ----------------- | ------------------------------------------ | ------------------------------- |
-| UI                | Streamlit                                  | Main web UI                     |
-| LLM Runtime       | Ollama                                     | Local inference via HTTP        |
-| Chains            | LangChain + langchain-ollama               | Prompt/runnable chains          |
-| PDF parsing       | pypdf                                      | Page extraction                 |
-| Chunking          | langchain-text-splitters                   | Recursive splitter              |
-| Dense embeddings  | sentence-transformers (`all-MiniLM-L6-v2`) | Local embedding model           |
-| Embedding wrapper | langchain-huggingface                      | Current supported wrapper       |
-| Vector store      | ChromaDB                                   | Persistent per-room index       |
-| Sparse retrieval  | BM25Retriever                              | Custom n-gram preprocess        |
-| Auth hashing      | bcrypt                                     | Direct bcrypt usage             |
-| Database          | SQLite                                     | Users, rooms, history, settings |
+| Layer             | Technology                                                               | Notes                           |
+| ----------------- | ------------------------------------------------------------------------ | ------------------------------- |
+| UI                | Streamlit                                                                | Main web UI                     |
+| LLM Runtime       | Ollama                                                                   | Local inference via HTTP        |
+| Chains            | LangChain + langchain-ollama                                             | Prompt/runnable chains          |
+| PDF parsing       | pypdf                                                                    | Page extraction                 |
+| Chunking          | langchain-text-splitters                                                 | Recursive splitter              |
+| Dense embeddings  | sentence-transformers (`all-MiniLM-L6-v2`) + Ollama (`nomic-embed-text`) | Selectable embedding backend    |
+| Embedding wrapper | langchain-huggingface                                                    | Current supported wrapper       |
+| Vector store      | ChromaDB                                                                 | Persistent per-room index       |
+| Sparse retrieval  | BM25Retriever                                                            | Custom n-gram preprocess        |
+| Auth hashing      | bcrypt                                                                   | Direct bcrypt usage             |
+| Database          | SQLite                                                                   | Users, rooms, history, settings |
 
 ---
 
@@ -78,7 +81,7 @@ engine/retriever.py -> custom BM25 n-gram + vector + weighted RRF
 ### 4.2 Study Room Tables
 
 - `study_rooms`
-  - room metadata (`title`, `chroma_dir`, model/settings snapshot, timestamps)
+  - room metadata (`title`, `chroma_dir`, model + embedding + settings snapshot, timestamps)
 - `room_files`
   - uploaded file timeline per room (`file_name`, `file_path`, `uploaded_at`)
 
@@ -128,13 +131,13 @@ Example:
 
 Admin performance modes:
 
-- Fast: `llama3.2:3b`, `top_k=3`, `chunk_size=512`, `temperature=0.2`
-- Quality: `llama3.1:8b`, `top_k=5`, `chunk_size=768`, `temperature=0.3`
-- Custom: manual values
+- Fast: `llama3.2:3b` + `all-MiniLM-L6-v2`, `top_k=3`, `chunk_size=512`, `temperature=0.2`
+- Quality: `llama3.1:8b` + `nomic-embed-text`, `top_k=5`, `chunk_size=768`, `temperature=0.3`
+- Custom: manual LLM + embedding + retrieval values
 
 User role sees read-only settings.
 
-Performance mode control is rendered in the upload settings panel (not in the sidebar).
+Performance and embedding controls are rendered in **Setting & Help** and editable by **admin role only**.
 
 ### 6.2 Study Rooms Timeline
 
@@ -174,6 +177,7 @@ Messages are saved with room context:
 ### 6.6 Upload Panel Behavior
 
 - `Upload & Process PDF` expander is always expanded.
+- Upload-side configuration is read-only (shows admin-selected active config).
 - Processing Trace remains in a separate collapsed expander.
 
 ### 6.7 Sidebar Theme Behavior
@@ -227,16 +231,31 @@ Shows:
 | Variable             | Default                  | Purpose         |
 | -------------------- | ------------------------ | --------------- |
 | `OLLAMA_BASE_URL`    | `http://localhost:11434` | Ollama endpoint |
+| `OLLAMA_MODEL`       | `llama3.1:8b`            | Default LLM seed for first-run system settings |
+| `DEFAULT_EMBEDDING_MODEL` | `all-MiniLM-L6-v2` | Default embedding seed for first-run system settings |
+| `OLLAMA_EMBED_MODEL` | `nomic-embed-text`       | Ollama embedding model name when selected |
+| `HF_EMBED_MODEL`     | `sentence-transformers/all-MiniLM-L6-v2` | HuggingFace embedding model repo when selected |
 | `UPLOAD_DIR`         | `data/uploads`           | PDF storage     |
 | `CHROMA_PERSIST_DIR` | `data/chroma_db`         | Chroma root     |
+| `TOP_K`              | `4`                      | Default top-k seed for first-run system settings |
+| `CHUNK_SIZE`         | `512`                    | Default chunk size seed for first-run system settings |
+| `CHUNK_OVERLAP`      | `80`                     | Default chunk overlap seed for first-run system settings |
+| `TEMPERATURE`        | `0.2`                    | Default temperature seed for first-run system settings |
 
 ---
 
 ## 10) Supported Models (Current UI)
 
+LLM:
+
 - `llama3.1:8b`
 - `llama3.2:3b`
 - `phi3:mini`
+
+Embedding:
+
+- `all-MiniLM-L6-v2`
+- `nomic-embed-text`
 
 ---
 
@@ -245,6 +264,22 @@ Shows:
 - Windows file-lock safe approach: never hard-delete active index; use per-run unique folder.
 - Terminal logs include processing and chat/retrieval diagnostics.
 - Default admin created on first run (`admin` / `admin123`).
+
+### Offline Mode Checklist
+
+To run without internet after setup:
+
+1. Install dependencies at least once while online.
+2. Pull required Ollama models at least once:
+  - `llama3.1:8b`
+  - `nomic-embed-text`
+3. If using `all-MiniLM-L6-v2`, run one processing session online once to cache HuggingFace files.
+4. Ensure `OLLAMA_BASE_URL` points to local Ollama.
+
+Notes:
+
+- First-time model downloads always require internet.
+- If HuggingFace DNS/download fails offline, switch embedding to `nomic-embed-text` in Setting & Help.
 
 ---
 

@@ -50,11 +50,17 @@ load_dotenv()
 OLLAMA_BASE_URL: str = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
 UPLOAD_DIR: str      = os.getenv("UPLOAD_DIR", "data/uploads")
 CHROMA_DIR: str      = os.getenv("CHROMA_PERSIST_DIR", "data/chroma_db")
+DEFAULT_EMBEDDING_MODEL: str = os.getenv("DEFAULT_EMBEDDING_MODEL", "all-MiniLM-L6-v2")
 
 MODEL_OPTIONS = [
     "llama3.1:8b",
     "llama3.2:3b",
     "phi3:mini",
+]
+
+EMBEDDING_OPTIONS = [
+    "all-MiniLM-L6-v2",
+    "nomic-embed-text",
 ]
 
 FILE_AI_ICON_SVG = (
@@ -225,6 +231,7 @@ def initialize_state() -> None:
         "quiz_active": False,
         "quiz_context": "",
         "process_trace": None,
+        "uploader_nonce": 0,
     }
     for key, val in defaults.items():
         if key not in st.session_state:
@@ -293,11 +300,17 @@ def load_study_room(room_id: int) -> tuple[bool, str]:
         return False, "Could not load chunks from the files in this room."
 
     chroma_dir = room["chroma_dir"]
+    embedding_model = (
+        room["embedding_model"]
+        if "embedding_model" in room.keys()
+        else get_system_settings().get("embedding_model", DEFAULT_EMBEDDING_MODEL)
+    )
     os.makedirs(chroma_dir, exist_ok=True)
     st.session_state.retriever = build_hybrid_retriever(
         all_chunks,
         persist_dir=chroma_dir,
         top_k=int(room["top_k"]),
+        embedding_model=embedding_model,
     )
     st.session_state.current_room_id = room_id
     st.session_state.processed = True
@@ -311,6 +324,7 @@ def load_study_room(room_id: int) -> tuple[bool, str]:
         "total_files": len(file_rows),
         "total_chunks": len(all_chunks),
         "model_name": room["model_name"],
+        "embedding_model": embedding_model,
         "top_k": int(room["top_k"]),
         "chunk_size": int(room["chunk_size"]),
         "chunk_overlap": int(room["chunk_overlap"]),
@@ -437,6 +451,7 @@ def render_sidebar() -> None:
 
     if st.sidebar.button("New Chat", use_container_width=True):
         _reset_runtime_state(keep_room=False)
+        st.session_state.uploader_nonce += 1
         st.session_state.active_page = "chat"
         st.rerun()
 
@@ -454,111 +469,20 @@ def render_sidebar() -> None:
         st.rerun()
 
 
-def render_upload_settings_panel() -> tuple[str, int, float, int]:
+def render_upload_settings_panel() -> tuple[str, str, int, float, int]:
     settings = get_system_settings()
-    fast_model = "llama3.2:3b"
-    quality_model = "llama3.1:8b"
-
-    if is_admin():
-
-        fast_preset = {
-            "model_name": fast_model,
-            "top_k": 3,
-            "temperature": 0.2,
-            "chunk_size": 512,
-        }
-        quality_preset = {
-            "model_name": quality_model,
-            "top_k": 5,
-            "temperature": 0.3,
-            "chunk_size": 768,
-        }
-
-        if settings["model_name"] == fast_model:
-            default_mode = "Fast"
-        elif settings["model_name"] == quality_model:
-            default_mode = "Quality"
-        else:
-            default_mode = "Custom"
-
-        mode_key = "performance_mode"
-        if mode_key not in st.session_state:
-            st.session_state[mode_key] = default_mode
-        elif st.session_state[mode_key] not in {"Fast", "Quality", "Custom"}:
-            st.session_state[mode_key] = default_mode
-
-        performance_mode = st.radio(
-            "Performance Mode",
-            options=["Fast", "Quality", "Custom"],
-            key=mode_key,
-            horizontal=True,
-            help="Choose performance profile for this room",
-        )
-
-        if performance_mode == "Fast":
-            model_name = fast_preset["model_name"]
-            top_k = fast_preset["top_k"]
-            temperature = fast_preset["temperature"]
-            chunk_size = fast_preset["chunk_size"]
-            chunk_overlap = settings["chunk_overlap"]
-            if (
-                settings["model_name"] != model_name
-                or settings["top_k"] != top_k
-                or settings["temperature"] != temperature
-                or settings["chunk_size"] != chunk_size
-            ):
-                save_system_settings(model_name, top_k, temperature, chunk_size, chunk_overlap)
-
-            st.caption(f"Model `{model_name}` · TopK `{top_k}` · Chunk `{chunk_size}`")
-            return model_name, top_k, temperature, chunk_size
-
-        if performance_mode == "Quality":
-            model_name = quality_preset["model_name"]
-            top_k = quality_preset["top_k"]
-            temperature = quality_preset["temperature"]
-            chunk_size = quality_preset["chunk_size"]
-            chunk_overlap = settings["chunk_overlap"]
-            if (
-                settings["model_name"] != model_name
-                or settings["top_k"] != top_k
-                or settings["temperature"] != temperature
-                or settings["chunk_size"] != chunk_size
-            ):
-                save_system_settings(model_name, top_k, temperature, chunk_size, chunk_overlap)
-
-            st.caption(f"Model `{model_name}` · TopK `{top_k}` · Chunk `{chunk_size}`")
-            return model_name, top_k, temperature, chunk_size
-
-        model_name = st.selectbox(
-            "LLM Model",
-            options=MODEL_OPTIONS,
-            index=MODEL_OPTIONS.index(settings["model_name"])
-            if settings["model_name"] in MODEL_OPTIONS
-            else 0,
-        )
-        top_k = st.slider("Top K Chunks", 1, 10, settings["top_k"])
-        chunk_size = st.select_slider(
-            "Chunk Size (tokens)", [256, 512, 768, 1024], settings["chunk_size"]
-        )
-        temperature = st.slider(
-            "Temperature", 0.0, 1.0, settings["temperature"], step=0.05
-        )
-        chunk_overlap = settings["chunk_overlap"]
-
-        if st.button("Save Settings", use_container_width=True):
-            save_system_settings(model_name, top_k, temperature, chunk_size, chunk_overlap)
-            st.success("Settings saved")
-
-        return model_name, top_k, temperature, chunk_size
-
     model_name = settings["model_name"]
+    embedding_model = settings.get("embedding_model", DEFAULT_EMBEDDING_MODEL)
     top_k = settings["top_k"]
     temperature = settings["temperature"]
     chunk_size = settings["chunk_size"]
     st.markdown("###### Performance Mode")
-    st.caption(f"Model `{model_name}` · TopK `{top_k}` · Temperature `{temperature}` · Chunk `{chunk_size}`")
-    st.caption("Read-only. Admin can change settings.")
-    return model_name, top_k, temperature, chunk_size
+    st.caption(
+        f"LLM `{model_name}` · Embed `{embedding_model}` · TopK `{top_k}` · "
+        f"Temperature `{temperature}` · Chunk `{chunk_size}`"
+    )
+    st.caption("Read-only here. Admin can change these in Setting & Help.")
+    return model_name, embedding_model, top_k, temperature, chunk_size
 
 
 def render_settings_page() -> None:
@@ -597,10 +521,141 @@ def render_settings_page() -> None:
             else:
                 st.error(msg)
 
+    st.markdown("#### Performance Model Control")
+    if is_admin():
+        settings = get_system_settings()
+        fast_preset = {
+            "model_name": "llama3.2:3b",
+            "embedding_model": "all-MiniLM-L6-v2",
+            "top_k": 3,
+            "temperature": 0.2,
+            "chunk_size": 512,
+        }
+        quality_preset = {
+            "model_name": "llama3.1:8b",
+            "embedding_model": "nomic-embed-text",
+            "top_k": 5,
+            "temperature": 0.3,
+            "chunk_size": 768,
+        }
+
+        if (
+            settings["model_name"] == fast_preset["model_name"]
+            and settings.get("embedding_model") == fast_preset["embedding_model"]
+            and settings["top_k"] == fast_preset["top_k"]
+            and settings["temperature"] == fast_preset["temperature"]
+            and settings["chunk_size"] == fast_preset["chunk_size"]
+        ):
+            default_mode = "Fast"
+        elif (
+            settings["model_name"] == quality_preset["model_name"]
+            and settings.get("embedding_model") == quality_preset["embedding_model"]
+            and settings["top_k"] == quality_preset["top_k"]
+            and settings["temperature"] == quality_preset["temperature"]
+            and settings["chunk_size"] == quality_preset["chunk_size"]
+        ):
+            default_mode = "Quality"
+        else:
+            default_mode = "Custom"
+
+        perf_key = "settings_performance_mode"
+        if perf_key not in st.session_state or st.session_state[perf_key] not in {"Fast", "Quality", "Custom"}:
+            st.session_state[perf_key] = default_mode
+
+        performance_mode = st.radio(
+            "Mode",
+            options=["Fast", "Quality", "Custom"],
+            key=perf_key,
+            horizontal=True,
+        )
+
+        chunk_overlap = settings["chunk_overlap"]
+        if performance_mode == "Fast":
+            st.caption(
+                f"LLM `{fast_preset['model_name']}` · Embed `{fast_preset['embedding_model']}` "
+            )
+            st.caption(
+                f"TopK `{fast_preset['top_k']}` · Temp `{fast_preset['temperature']}` · Chunk `{fast_preset['chunk_size']}`"
+            )
+            if st.button("Apply Fast", use_container_width=False):
+                save_system_settings(
+                    fast_preset["model_name"],
+                    fast_preset["embedding_model"],
+                    fast_preset["top_k"],
+                    fast_preset["temperature"],
+                    fast_preset["chunk_size"],
+                    chunk_overlap,
+                )
+                st.success("Fast profile applied")
+                st.rerun()
+            
+        elif performance_mode == "Quality":
+            st.caption(
+                f"LLM `{quality_preset['model_name']}` · Embed `{quality_preset['embedding_model']}` "
+            )
+            st.caption(
+                f"TopK `{quality_preset['top_k']}` · Temp `{quality_preset['temperature']}` · Chunk `{quality_preset['chunk_size']}`"
+            )
+            if st.button("Apply Quality", use_container_width=False):
+                save_system_settings(
+                    quality_preset["model_name"],
+                    quality_preset["embedding_model"],
+                    quality_preset["top_k"],
+                    quality_preset["temperature"],
+                    quality_preset["chunk_size"],
+                    chunk_overlap,
+                )
+                st.success("Quality profile applied")
+                st.rerun()
+            
+        else:
+            llm_model = st.selectbox(
+                "LLM Model",
+                options=MODEL_OPTIONS,
+                index=MODEL_OPTIONS.index(settings["model_name"]) if settings["model_name"] in MODEL_OPTIONS else 0,
+            )
+            embedding_model = st.selectbox(
+                "Embedding Model",
+                options=EMBEDDING_OPTIONS,
+                index=EMBEDDING_OPTIONS.index(settings.get("embedding_model", DEFAULT_EMBEDDING_MODEL))
+                if settings.get("embedding_model", DEFAULT_EMBEDDING_MODEL) in EMBEDDING_OPTIONS
+                else 0,
+            )
+            top_k = st.slider("Top K Chunks", 1, 10, settings["top_k"], key="settings_topk")
+            chunk_size = st.select_slider(
+                "Chunk Size (tokens)", [256, 512, 768, 1024], settings["chunk_size"], key="settings_chunk_size"
+            )
+            temperature = st.slider(
+                "Temperature", 0.0, 1.0, settings["temperature"], step=0.05, key="settings_temp"
+            )
+            if st.button("Save Custom", use_container_width=False):
+                save_system_settings(
+                    llm_model,
+                    embedding_model,
+                    top_k,
+                    temperature,
+                    chunk_size,
+                    chunk_overlap,
+                )
+                st.success("Custom settings saved")
+                st.rerun()
+    else:
+        settings = get_system_settings()
+        st.caption(
+            "Read-only. Admin only can edit performance/embedding settings."
+        )
+        st.write(
+            f"- LLM: `{settings['model_name']}`\n"
+            f"- Embedding: `{settings.get('embedding_model', DEFAULT_EMBEDDING_MODEL)}`\n"
+            f"- Top K: `{settings['top_k']}`\n"
+            f"- Temperature: `{settings['temperature']}`\n"
+            f"- Chunk Size: `{settings['chunk_size']}`"
+        )
+
     st.markdown("#### Help")
     st.write("- Use **New Chat** in sidebar to start a fresh room with new files.")
     st.write("- Use **Chats** in sidebar to continue previous room history.")
-    st.write("- Performance Mode is configured in the right side of Upload settings.")
+    st.write("- Performance mode and embedding model are configured in Setting & Help.")
 
     if st.button("Back to Chat", use_container_width=False):
         st.session_state.active_page = "chat"
@@ -616,6 +671,7 @@ def process_documents(
     chunk_size: int,
     top_k: int,
     model_name: str,
+    embedding_model: str,
     temperature: float,
 ) -> None:
     settings = get_system_settings()
@@ -631,6 +687,7 @@ def process_documents(
         "[DeepDoc - AI-Powered Document Intelligence] System settings:",
         {
             "model_name": settings.get("model_name"),
+            "embedding_model": settings.get("embedding_model"),
             "top_k": settings.get("top_k"),
             "temperature": settings.get("temperature"),
             "chunk_size": settings.get("chunk_size"),
@@ -641,6 +698,7 @@ def process_documents(
         "[DeepDoc - AI-Powered Document Intelligence] Effective process params:",
         {
             "uploaded_files": [uf.name for uf in uploaded_files],
+            "embedding_model": embedding_model,
             "top_k": top_k,
             "chunk_size": chunk_size,
             "chunk_overlap": chunk_overlap,
@@ -676,6 +734,7 @@ def process_documents(
         title=room_title,
         chroma_dir=user_chroma_dir,
         model_name=model_name,
+        embedding_model=embedding_model,
         top_k=top_k,
         chunk_size=chunk_size,
         chunk_overlap=chunk_overlap,
@@ -685,7 +744,10 @@ def process_documents(
         add_room_file(room_id, f["file_name"], f["file_path"])
 
     st.session_state.retriever = build_hybrid_retriever(
-        all_chunks, persist_dir=user_chroma_dir, top_k=top_k
+        all_chunks,
+        persist_dir=user_chroma_dir,
+        top_k=top_k,
+        embedding_model=embedding_model,
     )
     st.session_state.current_room_id = room_id
     st.session_state.processed = True
@@ -699,6 +761,7 @@ def process_documents(
         "total_files": len(uploaded_files),
         "total_chunks": len(all_chunks),
         "model_name": model_name,
+        "embedding_model": embedding_model,
         "top_k": top_k,
         "chunk_size": chunk_size,
         "chunk_overlap": chunk_overlap,
@@ -1021,6 +1084,7 @@ def main() -> None:
 
     settings = get_system_settings()
     model_name = settings["model_name"]
+    embedding_model = settings.get("embedding_model", DEFAULT_EMBEDDING_MODEL)
     top_k = settings["top_k"]
     temperature = settings["temperature"]
     chunk_size = settings["chunk_size"]
@@ -1032,13 +1096,14 @@ def main() -> None:
         col_upload, col_settings = st.columns([2, 1])
 
         with col_settings:
-            model_name, top_k, temperature, chunk_size = render_upload_settings_panel()
+            model_name, embedding_model, top_k, temperature, chunk_size = render_upload_settings_panel()
 
         with col_upload:
             uploaded_files = st.file_uploader(
                 "Upload one or more PDF files",
                 type=["pdf"],
                 accept_multiple_files=True,
+                key=f"upload_files_{st.session_state.uploader_nonce}",
             )
 
             if uploaded_files:
@@ -1052,6 +1117,7 @@ def main() -> None:
                             chunk_size,
                             top_k,
                             model_name,
+                            embedding_model,
                             temperature,
                         )
                     st.success(f"{len(uploaded_files)} file(s) indexed and ready!")
@@ -1080,6 +1146,7 @@ def main() -> None:
                 )
                 st.write(f"- Chroma DB: `{process_trace.get('chroma_dir', '')}`")
                 st.write(f"- Active Model: `{process_trace.get('model_name', '')}`")
+                st.write(f"- Embedding Model: `{process_trace.get('embedding_model', '')}`")
 
     tab_chat, tab_quiz = st.tabs(["Chat", "Quiz"])
 
