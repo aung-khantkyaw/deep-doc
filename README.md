@@ -1,85 +1,123 @@
-# DeepDoc
+# DeepDoc - AI-Powered Document Intelligence
 
-DeepDoc is a local RAG (Retrieval-Augmented Generation) study app for PDF files using Streamlit + Ollama.
+DeepDoc is a local RAG study app for PDF files using Streamlit + Ollama.
 
 ## Features
 
-- User registration and login (bcrypt password hashing)
+- User registration/login with bcrypt
 - Role-based access:
-  - **admin**: can change global system settings
-  - **user**: can upload and study with read-only settings
-- Upload one or more PDF files
-- Hybrid retrieval with custom `HybridRetriever`:
-  - BM25 keyword retrieval
+  - **admin**: manage global settings
+  - **user**: study with read-only settings
+- PDF upload and processing
+- Sidebar supports light/dark theme-aware styling
+- Hybrid retrieval via custom `HybridRetriever`:
+  - BM25 (with custom n-gram preprocessing)
   - Chroma vector retrieval
-  - Weighted Reciprocal Rank Fusion (RRF)
-- **💬 Chat**: ask questions from uploaded documents
-- **🎓 Quiz**: generate questions + evaluate answers with structured feedback
-- Per-user chat and quiz history stored in SQLite
-- Debug visibility in UI:
+  - weighted RRF fusion
+- **Chat** from uploaded documents
+- **Quiz** generation + evaluation
+- **Study Rooms timeline** in sidebar:
+  - reopen old room and continue existing chat
+  - start new room by uploading new files
+- Chat bubbles are rendered in one grouped area
+- Chat input box is always shown below the bubble group (disabled until docs are processed)
+- **Upload & Process PDF** panel is always expanded
+- UI traces:
   - Processing Trace
   - BM25 + Vector Retrieval Trace
-- All inference runs locally via Ollama (no cloud LLM key required)
+- All inference runs locally through Ollama
 
 ## Performance Modes
 
-Admin sidebar supports 3 modes:
+Admin upload-settings panel modes:
 
-- **Fast** (auto-applied):
+- **Fast** (auto-applied)
   - model: `llama3.2:3b`
   - `top_k=3`, `chunk_size=512`, `temperature=0.2`
-- **Quality** (auto-applied):
+- **Quality** (auto-applied)
   - model: `llama3.1:8b`
   - `top_k=5`, `chunk_size=768`, `temperature=0.3`
-- **Custom**:
-  - choose model and retrieval/generation settings manually
+- **Custom**
+  - manual model and settings
+
+## Study Rooms (Timeline + Continuation)
+
+Each document processing run creates a room:
+
+- `study_rooms` record (settings snapshot + index path)
+- `room_files` records (uploaded files with timestamps)
+- room-scoped chat/quiz history (via `room_id`)
+
+This allows:
+
+- selecting a previous room and continuing chat
+- creating a new room with new uploads without losing old rooms
+
+## How to use Study Rooms
+
+1. Upload PDF file(s) and click **Process Documents**.
+
+- DeepDoc creates a new study room automatically.
+
+2. Ask questions in **Chat**.
+
+- Messages are saved to that room.
+
+3. Open **Chats** in the sidebar.
+
+- Click any previous room to continue its existing chat history,
+- or click **New Chat** to start a fresh room.
 
 ## Retrieval Pipeline
 
 1. Parse PDF pages (`pypdf`)
-2. Split into chunks (`RecursiveCharacterTextSplitter`)
-3. Build hybrid retriever:
-   - BM25Retriever
-   - Chroma retriever with `all-MiniLM-L6-v2`
-4. Fuse rankings via weighted RRF
+2. Split chunks (`RecursiveCharacterTextSplitter`)
+3. Build BM25 + vector retrievers
+4. Fuse rankings with weighted RRF
+5. Send fused context to LLM
+
+### BM25 n-gram preprocessing
+
+BM25 uses custom `preprocess_func` with:
+
+- normalization
+- unigram + bigram + trigram features
+
+This improves phrase-level matching compared with plain unigram tokenization.
 
 ## Windows File-Lock Safe Indexing
 
-When processing documents multiple times, DeepDoc builds a fresh Chroma index per run:
+Per processing run, DeepDoc creates a unique index folder:
 
 - `data/chroma_db/user_<id>/idx_<uuid>/`
 
-This avoids `PermissionError [WinError 32]` caused by deleting in-use index files.
+This avoids `PermissionError [WinError 32]` when old index files are still locked.
 
 ## Project Structure
 
 ```text
 DeepDoc/
-├── .env
-├── .evn.example
-├── .gitignore
+├── app.py
+├── README.md
+├── SYSTEM_DOCUMENT.md
+├── requirements.txt
 ├── docker-compose.yml
 ├── Dockerfile
-├── requirements.txt
-├── app.py
-├── SYSTEM_DOCUMENT.md
-├── README.md
+├── .env
+├── .evn.example
 ├── auth/
-│   ├── __init__.py
 │   ├── database.py
 │   └── manager.py
 ├── engine/
-│   ├── __init__.py
 │   ├── processor.py
 │   ├── retriever.py
 │   └── llm_chain.py
 ├── utils/
-│   ├── __init__.py
 │   └── helpers.py
 └── data/
-        ├── uploads/
-        ├── chroma_db/
-        └── deepdoc.db
+    ├── uploads/
+    ├── chroma_db/
+    └── deepdoc.db
 ```
 
 ## Requirements
@@ -94,6 +132,7 @@ DeepDoc/
 docker compose up -d ollama
 docker exec -it ollama ollama pull llama3.1:8b
 docker exec -it ollama ollama pull llama3.2:3b
+docker exec -it ollama ollama pull phi3:mini
 ```
 
 ## Local Setup
@@ -153,9 +192,11 @@ Change this password after first login.
 
 ## Current Status
 
-- ✅ User auth with bcrypt
-- ✅ Role-based settings with admin control
-- ✅ Hybrid BM25 + vector retrieval (custom `HybridRetriever`)
-- ✅ Chat + quiz workflows with per-user history
-- ✅ Retrieval/process trace panels in UI
-- ✅ Windows-safe per-run Chroma index strategy
+- Auth with bcrypt
+- Role-based settings
+- Hybrid BM25 + vector retrieval (custom `HybridRetriever`)
+- BM25 n-gram preprocess (uni/bi/tri-gram)
+- Study room timeline + room-based chat continuation
+- Chat + quiz persistence by room
+- Processing and retrieval trace panels
+- Windows-safe per-run Chroma indexing

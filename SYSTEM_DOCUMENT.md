@@ -1,229 +1,208 @@
-# DeepDoc — System Document
+# DeepDoc - AI-Powered Document Intelligence — System Document
 
 > Version: 1.0.0 · Date: 2026-03-01  
-> Local, privacy-first PDF study assistant with hybrid retrieval and role-based access.
+> Local, privacy-first PDF study assistant with hybrid retrieval, study-room timeline, and role-based access.
 
 ---
 
 ## 1) Overview
 
-DeepDoc lets users upload PDF files, then interact with content in two modes:
+DeepDoc supports two study modes from uploaded PDFs:
 
-- 💬 Chat: question-answering over uploaded PDFs (RAG)
-- 🎓 Quiz: question generation + answer evaluation
+- Chat: document-grounded Q&A (RAG)
+- Quiz: auto-generated questions + answer evaluation
 
-All LLM inference runs locally through Ollama.
+Everything runs locally with Ollama.
 
 ---
 
-## 2) Current Architecture (Implemented)
+## 2) Current Architecture
 
 ```text
-Browser (Streamlit UI)
+Browser (Streamlit)
    │
    ▼
 app.py
   ├─ Auth Gate (login/register)
-  ├─ Sidebar Settings
-  │   ├─ Admin: editable settings + Fast/Quality/Custom mode
-  │   └─ User: read-only settings
+  ├─ Sidebar (theme-aware styling, room timeline, app actions)
+  ├─ Upload Settings Panel (admin editable / user read-only)
+  ├─ Study Rooms Sidebar Timeline
+  │   ├─ select existing room -> restore room chat context
+  │   └─ new chat -> upload new file set -> create new room
   ├─ Upload & Process
-  │   ├─ PDF save -> data/uploads/
-  │   ├─ PDF parse + chunk -> engine/processor.py
-  │   ├─ Hybrid index build -> engine/retriever.py
-  │   └─ Process trace UI + terminal logs
+  │   ├─ save files
+  │   ├─ parse + chunk
+  │   ├─ build HybridRetriever (BM25 + Vector)
+  │   └─ show Processing Trace
   ├─ Chat Tab
-  │   ├─ Hybrid retrieval (BM25 + vector)
-  │   ├─ Retrieval trace UI (query/retrieve/fuse/context)
-  │   └─ LLM answer -> engine/llm_chain.py
+  │   ├─ retrieve (BM25+Vector+RRF)
+  │   ├─ show Retrieval Trace
+  │   └─ generate grounded answer
   └─ Quiz Tab
-      ├─ Generate questions from retrieved context
-      └─ Evaluate user answers
+      ├─ generate quiz questions
+      └─ evaluate answers
 
-auth/database.py -> SQLite (users, history, settings)
-auth/manager.py  -> register/login, bcrypt hashing, settings API
+auth/database.py -> SQLite (users, rooms, room files, history, settings)
+auth/manager.py  -> auth + bcrypt + typed settings
+engine/retriever.py -> custom BM25 n-gram + vector + weighted RRF
 ```
 
 ---
 
 ## 3) Tech Stack
 
-| Layer             | Technology                                 | Notes                                            |
-| ----------------- | ------------------------------------------ | ------------------------------------------------ |
-| UI                | Streamlit                                  | Main web interface                               |
-| LLM Runtime       | Ollama                                     | Local inference via HTTP                         |
-| Chains            | LangChain + langchain-ollama               | Prompt + runnable pipelines                      |
-| PDF parsing       | pypdf                                      | Page text extraction                             |
-| Chunking          | langchain-text-splitters                   | RecursiveCharacterTextSplitter                   |
-| Dense embeddings  | sentence-transformers (`all-MiniLM-L6-v2`) | Local embedding model                            |
-| Embedding wrapper | langchain-huggingface                      | Replaces deprecated community embeddings wrapper |
-| Vector store      | ChromaDB                                   | Persistent vector index                          |
-| Sparse retrieval  | rank_bm25 via BM25Retriever                | Keyword matching                                 |
-| Auth hashing      | bcrypt                                     | Direct bcrypt usage                              |
-| DB                | SQLite                                     | Users, history, settings                         |
+| Layer             | Technology                                 | Notes                           |
+| ----------------- | ------------------------------------------ | ------------------------------- |
+| UI                | Streamlit                                  | Main web UI                     |
+| LLM Runtime       | Ollama                                     | Local inference via HTTP        |
+| Chains            | LangChain + langchain-ollama               | Prompt/runnable chains          |
+| PDF parsing       | pypdf                                      | Page extraction                 |
+| Chunking          | langchain-text-splitters                   | Recursive splitter              |
+| Dense embeddings  | sentence-transformers (`all-MiniLM-L6-v2`) | Local embedding model           |
+| Embedding wrapper | langchain-huggingface                      | Current supported wrapper       |
+| Vector store      | ChromaDB                                   | Persistent per-room index       |
+| Sparse retrieval  | BM25Retriever                              | Custom n-gram preprocess        |
+| Auth hashing      | bcrypt                                     | Direct bcrypt usage             |
+| Database          | SQLite                                     | Users, rooms, history, settings |
 
 ---
 
-## 4) Project Structure
+## 4) Data Model (SQLite)
 
-```text
-DeepDoc/
-├── app.py
-├── README.md
-├── SYSTEM_DOCUMENT.md
-├── requirements.txt
-├── docker-compose.yml
-├── Dockerfile
-├── .env / .evn.example
-├── auth/
-│   ├── database.py
-│   └── manager.py
-├── engine/
-│   ├── processor.py
-│   ├── retriever.py
-│   └── llm_chain.py
-├── utils/
-│   └── helpers.py
-└── data/
-    ├── uploads/
-    ├── chroma_db/
-    └── deepdoc.db
-```
-
----
-
-## 5) Module Reference
-
-### 5.1 `app.py`
-
-Main Streamlit entrypoint.
-
-Key responsibilities:
-
-- Session bootstrap and auth gate
-- Role-based sidebar settings
-- Document processing pipeline orchestration
-- Chat and quiz interaction loops
-- UI trace panels (processing + retrieval)
-- Terminal debug logging for processing and chat
-
-Notable implemented behavior:
-
-- **Performance Mode (admin):**
-  - Fast: `llama3.2:3b`, `top_k=3`, `chunk_size=512`, `temperature=0.2`
-  - Quality: `llama3.1:8b`, `top_k=5`, `chunk_size=768`, `temperature=0.3`
-  - Custom: manual controls + save button
-- **Windows-safe reprocessing:** new unique Chroma subfolder per processing run to avoid file-lock delete failures.
-
-### 5.2 `engine/processor.py`
-
-Pipeline:
-
-1. `load_pdf()` -> one `Document` per page with metadata `{source, page}`
-2. `split_documents()` -> chunked docs with overlap
-3. `process_pdf()` -> full load + split
-
-### 5.3 `engine/retriever.py`
-
-Defines `HybridRetriever(BaseRetriever)` with weighted Reciprocal Rank Fusion (RRF):
-
-- BM25 retrieval (`BM25Retriever`)
-- Vector retrieval (`Chroma` retriever)
-- Fusion with configurable weights (`bm25_weight`, `vector_weight`)
-
-Also stores `last_debug_info` for UI/terminal trace:
-
-- Original/normalized query
-- BM25/vector/fused counts
-- Top preview snippets with source/page metadata
-
-`build_hybrid_retriever(...)` builds and returns `HybridRetriever`.
-
-### 5.4 `engine/llm_chain.py`
-
-Implemented chains:
-
-- `build_chat_chain(retriever, model, temperature, base_url)`
-- `build_chat_chain_with_context(model, temperature, base_url)`
-- `build_quiz_chain(model, temperature, base_url)`
-- `build_eval_chain(model, base_url)`
-
-Chat prompt behavior:
-
-- Use context as primary source
-- Return fallback sentence only when context is empty/clearly unrelated
-
-### 5.5 `utils/helpers.py`
-
-- Save uploaded files
-- Render chat messages
-- Parse generated quiz questions
-
-### 5.6 `auth/database.py`
-
-SQLite CRUD and table bootstrap for:
+### 4.1 Core Tables
 
 - `users`
-- `chat_history`
 - `system_settings`
+- `chat_history` (includes `room_id` migration column)
 
-### 5.7 `auth/manager.py`
+### 4.2 Study Room Tables
 
-- Registration/login workflow
-- Password hashing/verification with `bcrypt`
-- Default admin creation
-- Typed settings read/write helpers
+- `study_rooms`
+  - room metadata (`title`, `chroma_dir`, model/settings snapshot, timestamps)
+- `room_files`
+  - uploaded file timeline per room (`file_name`, `file_path`, `uploaded_at`)
+
+This enables:
+
+- selecting old rooms and continuing chat
+- creating new rooms with new uploads
+- preserving room-specific histories
 
 ---
 
-## 6) Retrieval Strategy (Current)
+## 5) Retrieval Strategy (Implemented)
 
 DeepDoc uses hybrid sparse+dense retrieval:
 
-1. BM25 for lexical matching
-2. Vector search for semantic matching
-3. Weighted RRF fusion for final ranking
+1. BM25 lexical retrieval
+2. Vector semantic retrieval
+3. Weighted Reciprocal Rank Fusion (RRF)
 
 $$
-\text{score}(d) = \sum_{r \in \{\text{BM25}, \text{Vector}\}} \frac{w_r}{k_{rrf} + \text{rank}_r(d)}
+\text{score}(d)=\sum_{r \in \{\text{BM25},\text{Vector}\}}\frac{w_r}{k_{rrf}+\text{rank}_r(d)}
 $$
 
-Current defaults in retriever:
+Defaults:
 
 - BM25 weight: `0.4`
 - Vector weight: `0.6`
 - RRF constant: `60`
 
+### BM25 n-gram preprocessing
+
+Implemented custom preprocess function for BM25:
+
+- normalization + tokenization
+- unigram + bigram + trigram feature generation
+
+Example:
+
+- `polytechnic university maubin`
+- → `polytechnic`, `university`, `maubin`, `polytechnic_university`, `university_maubin`, `polytechnic_university_maubin`
+
 ---
 
-## 7) Data Flow
+## 6) App Behavior
 
-### 7.1 Process Documents
+### 6.1 Settings
 
-1. Read active settings from DB
-2. Create user-specific index root: `data/chroma_db/user_<id>/`
-3. Create new unique run directory: `idx_<uuid>`
-4. Save uploaded PDFs to `data/uploads/`
-5. Parse and chunk all files
-6. Build hybrid retriever with new index folder
-7. Save process trace to session state
-8. Best-effort cleanup of older index folders
+Admin performance modes:
 
-### 7.2 Chat Question
+- Fast: `llama3.2:3b`, `top_k=3`, `chunk_size=512`, `temperature=0.2`
+- Quality: `llama3.1:8b`, `top_k=5`, `chunk_size=768`, `temperature=0.3`
+- Custom: manual values
 
-1. User sends question
-2. Hybrid retriever returns fused chunks
-3. UI shows retrieval trace (query/retrieve/fuse/context stats)
-4. `build_chat_chain_with_context()` generates answer from same retrieved context
-5. Question + answer are persisted in `chat_history`
+User role sees read-only settings.
 
-### 7.3 Quiz
+Performance mode control is rendered in the upload settings panel (not in the sidebar).
 
-1. Retrieve broad concept context
-2. Generate numbered questions
-3. User answers per question
-4. Evaluation chain returns structured feedback
-5. Quiz interactions are persisted in `chat_history` (mode=`quiz`)
+### 6.2 Study Rooms Timeline
+
+Sidebar section `Chats`:
+
+- shows rooms in time order (`updated_at`)
+- each room shows title/time/file count
+- click room to load that room and continue existing chat
+- `New Chat` resets runtime state for a new room
+
+### 6.3 Process Documents
+
+On upload + process:
+
+1. create unique room index path: `data/chroma_db/user_<id>/idx_<uuid>`
+2. parse/chunk all uploaded files
+3. build retriever
+4. create `study_rooms` entry
+5. create `room_files` entries
+6. bind room as `current_room_id`
+7. show processing trace
+
+### 6.4 Chat / Quiz Persistence
+
+Messages are saved with room context:
+
+- `save_message(..., room_id=<current_room_id>)`
+- room reload restores room-specific chat history
+- quiz messages are also room-scoped
+
+### 6.5 Chat Layout Behavior
+
+- Chat bubbles are rendered in a grouped container.
+- Chat input is always displayed below the bubble group.
+- Before processing documents, chat input remains visible but disabled.
+
+### 6.6 Upload Panel Behavior
+
+- `Upload & Process PDF` expander is always expanded.
+- Processing Trace remains in a separate collapsed expander.
+
+### 6.7 Sidebar Theme Behavior
+
+- Sidebar styles are theme-aware for light/dark mode.
+- Text and button styles follow current Streamlit theme variables.
+
+---
+
+## 7) Debug/Trace UI
+
+### 7.1 Processing Trace
+
+Shows:
+
+- uploaded files
+- per-file chunk counts
+- total chunks
+- retrieval settings + index path
+
+### 7.2 Retrieval Trace
+
+Shows:
+
+- original/normalized query
+- BM25 n-gram token count + sample
+- BM25/vector result counts + weights
+- fused top chunk previews (source/page)
+- context size sent to LLM
 
 ---
 
@@ -233,6 +212,7 @@ Current defaults in retriever:
 - `auth_page`
 - `chat_history`
 - `retriever`
+- `current_room_id`
 - `processed`
 - `quiz_questions`
 - `quiz_idx`
@@ -244,58 +224,33 @@ Current defaults in retriever:
 
 ## 9) Environment Variables
 
-| Variable             | Default                  | Purpose               |
-| -------------------- | ------------------------ | --------------------- |
-| `OLLAMA_BASE_URL`    | `http://localhost:11434` | Ollama API endpoint   |
-| `UPLOAD_DIR`         | `data/uploads`           | Uploaded PDF storage  |
-| `CHROMA_PERSIST_DIR` | `data/chroma_db`         | Chroma root directory |
-
-System settings such as `model_name`, `top_k`, `temperature`, `chunk_size`, `chunk_overlap` are stored in SQLite (`system_settings`).
+| Variable             | Default                  | Purpose         |
+| -------------------- | ------------------------ | --------------- |
+| `OLLAMA_BASE_URL`    | `http://localhost:11434` | Ollama endpoint |
+| `UPLOAD_DIR`         | `data/uploads`           | PDF storage     |
+| `CHROMA_PERSIST_DIR` | `data/chroma_db`         | Chroma root     |
 
 ---
 
-## 10) Supported Models (UI Options)
+## 10) Supported Models (Current UI)
 
 - `llama3.1:8b`
 - `llama3.2:3b`
-- `mistral:7b`
 - `phi3:mini`
-- `phi4:14b`
-- `gemma2:9b`
-- `qwen2.5:7b`
-- `deepseek-r1:7b`
 
 ---
 
-## 11) Security & Access
+## 11) Operational Notes
 
-- Passwords hashed with `bcrypt`
-- Role-based UI controls:
-  - Admin can modify global settings
-  - User can view settings only
-- App seeds default admin on first boot if none exists
-
-Default admin credentials:
-
-- username: `admin`
-- password: `admin123`
-
-Change immediately after first login.
+- Windows file-lock safe approach: never hard-delete active index; use per-run unique folder.
+- Terminal logs include processing and chat/retrieval diagnostics.
+- Default admin created on first run (`admin` / `admin123`).
 
 ---
 
-## 12) Operational Notes
+## 12) Next Improvements
 
-- On Windows, Chroma files can remain locked by active handles; DeepDoc avoids hard-delete of in-use index by using a fresh run folder.
-- Processing and chat actions print diagnostics to terminal for debugging.
-- Retrieval and processing traces are also visible in UI expanders.
-
----
-
-## 13) Known Gaps / Next Improvements
-
-- Optional admin-only visibility toggle for debug traces
-- Retrieval score-level diagnostics in UI
-- Streaming token output in chat
-- Password change UI
-- User management panel for admin
+- Admin-only toggle for debug trace visibility
+- Room rename/delete from sidebar
+- Streaming answer output
+- Admin user management UI

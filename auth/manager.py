@@ -8,7 +8,10 @@ from auth.database import (
     create_user,
     email_exists,
     get_all_settings,
+    get_user_by_id,
     get_user_by_username,
+    update_user_password,
+    update_user_profile,
     update_setting,
     username_exists,
 )
@@ -133,3 +136,52 @@ def save_system_settings(
     update_setting("temperature",   str(temperature))
     update_setting("chunk_size",    str(chunk_size))
     update_setting("chunk_overlap", str(chunk_overlap))
+
+
+# ---------------------------------------------------------------------------
+# User profile
+# ---------------------------------------------------------------------------
+
+def update_profile(user_id: int, username: str, email: str) -> tuple[bool, str, dict | None]:
+    username = username.strip()
+    email = email.strip().lower()
+
+    if not username or not email:
+        return False, "Username and email are required.", None
+    if len(username) < 3:
+        return False, "Username must be at least 3 characters.", None
+
+    current = get_user_by_id(user_id)
+    if current is None:
+        return False, "User not found.", None
+
+    if username != current["username"] and username_exists(username):
+        return False, "Username is already taken.", None
+    if email != current["email"] and email_exists(email):
+        return False, "Email is already registered.", None
+
+    update_user_profile(user_id, username, email)
+    updated = get_user_by_id(user_id)
+    if updated is None:
+        return False, "Could not load updated profile.", None
+
+    user = {
+        "id": updated["id"],
+        "username": updated["username"],
+        "email": updated["email"],
+        "role": updated["role"],
+    }
+    return True, "Profile updated.", user
+
+
+def change_password(user_id: int, current_password: str, new_password: str) -> tuple[bool, str]:
+    row = get_user_by_id(user_id)
+    if row is None:
+        return False, "User not found."
+    if not verify_password(current_password, row["password_hash"]):
+        return False, "Current password is incorrect."
+    if len(new_password) < 6:
+        return False, "New password must be at least 6 characters."
+
+    update_user_password(user_id, hash_password(new_password))
+    return True, "Password updated."

@@ -46,11 +46,43 @@ def init_db() -> None:
             FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
         );
 
+        CREATE TABLE IF NOT EXISTS study_rooms (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id       INTEGER NOT NULL,
+            title         TEXT    NOT NULL,
+            chroma_dir    TEXT    NOT NULL,
+            model_name    TEXT    NOT NULL,
+            top_k         INTEGER NOT NULL,
+            chunk_size    INTEGER NOT NULL,
+            chunk_overlap INTEGER NOT NULL,
+            temperature   REAL    NOT NULL,
+            created_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at    TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS room_files (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            room_id     INTEGER NOT NULL,
+            file_name   TEXT    NOT NULL,
+            file_path   TEXT    NOT NULL,
+            uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (room_id) REFERENCES study_rooms(id) ON DELETE CASCADE
+        );
+
         CREATE TABLE IF NOT EXISTS system_settings (
             key   TEXT PRIMARY KEY,
             value TEXT NOT NULL
         );
     """)
+
+    # Backward-compatible migration for room-based history
+    columns = [
+        row["name"]
+        for row in cur.execute("PRAGMA table_info(chat_history)").fetchall()
+    ]
+    if "room_id" not in columns:
+        cur.execute("ALTER TABLE chat_history ADD COLUMN room_id INTEGER")
 
     # Default system settings (INSERT OR IGNORE — never overwrite admin changes)
     defaults = {
@@ -90,6 +122,26 @@ def get_user_by_id(user_id: int) -> sqlite3.Row | None:
     ).fetchone()
     conn.close()
     return row
+
+
+def update_user_profile(user_id: int, username: str, email: str) -> None:
+    conn = get_conn()
+    conn.execute(
+        "UPDATE users SET username = ?, email = ? WHERE id = ?",
+        (username, email, user_id),
+    )
+    conn.commit()
+    conn.close()
+
+
+def update_user_password(user_id: int, password_hash: str) -> None:
+    conn = get_conn()
+    conn.execute(
+        "UPDATE users SET password_hash = ? WHERE id = ?",
+        (password_hash, user_id),
+    )
+    conn.commit()
+    conn.close()
 
 
 def create_user(
@@ -167,11 +219,12 @@ def save_message(
     mode: str,
     role: str,
     content: str,
+    room_id: int | None = None,
 ) -> None:
     conn = get_conn()
     conn.execute(
-        "INSERT INTO chat_history (user_id, mode, role, content) VALUES (?, ?, ?, ?)",
-        (user_id, mode, role, content),
+        "INSERT INTO chat_history (user_id, mode, role, content, room_id) VALUES (?, ?, ?, ?, ?)",
+        (user_id, mode, role, content, room_id),
     )
     conn.commit()
     conn.close()
@@ -181,27 +234,150 @@ def get_user_history(
     user_id: int,
     mode: str = "chat",
     limit: int = 100,
+    room_id: int | None = None,
 ) -> list[sqlite3.Row]:
+    conn = get_conn()
+    if room_id is None:
+        rows = conn.execute(
+            """
+            SELECT role, content, created_at
+            FROM chat_history
+            WHERE user_id = ? AND mode = ? AND room_id IS NULL
+            ORDER BY created_at ASC
+            LIMIT ?
+            """,
+            (user_id, mode, limit),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            """
+            SELECT role, content, created_at
+            FROM chat_history
+            WHERE user_id = ? AND mode = ? AND room_id = ?
+            ORDER BY created_at ASC
+            LIMIT ?
+            """,
+            (user_id, mode, room_id, limit),
+        ).fetchall()
+    conn.close()
+    return rows
+
+
+def clear_user_history(user_id: int, mode: str = "chat", room_id: int | None = None) -> None:
+    conn = get_conn()
+    if room_id is None:
+        conn.execute(
+            "DELETE FROM chat_history WHERE user_id = ? AND mode = ? AND room_id IS NULL",
+            (user_id, mode),
+        )
+    else:
+        conn.execute(
+            "DELETE FROM chat_history WHERE user_id = ? AND mode = ? AND room_id = ?",
+            (user_id, mode, room_id),
+        )
+    conn.commit()
+    conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Study rooms (timeline of uploaded file sets)
+# ---------------------------------------------------------------------------
+
+def create_study_room(
+    user_id: int,
+    title: str,
+    chroma_dir: str,
+    model_name: str,
+    top_k: int,
+    chunk_size: int,
+    chunk_overlap: int,
+    temperature: float,
+) -> int:
+    conn = get_conn()
+    cur = conn.execute(
+        """
+        INSERT INTO study_rooms (
+            user_id, title, chroma_dir, model_name,
+            top_k, chunk_size, chunk_overlap, temperature
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            user_id,
+            title,
+            chroma_dir,
+            model_name,
+            top_k,
+            chunk_size,
+            chunk_overlap,
+            temperature,
+        ),
+    )
+    conn.commit()
+    room_id = cur.lastrowid
+    conn.close()
+    return room_id
+
+
+def touch_study_room(room_id: int) -> None:
+    conn = get_conn()
+    conn.execute(
+        "UPDATE study_rooms SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        (room_id,),
+    )
+    conn.commit()
+    conn.close()
+
+
+def get_study_room(room_id: int, user_id: int) -> sqlite3.Row | None:
+    conn = get_conn()
+    row = conn.execute(
+        "SELECT * FROM study_rooms WHERE id = ? AND user_id = ?",
+        (room_id, user_id),
+    ).fetchone()
+    conn.close()
+    return row
+
+
+def list_user_study_rooms(user_id: int, limit: int = 50) -> list[sqlite3.Row]:
     conn = get_conn()
     rows = conn.execute(
         """
-        SELECT role, content, created_at
-        FROM chat_history
-        WHERE user_id = ? AND mode = ?
-        ORDER BY created_at ASC
+     SELECT r.id, r.title, r.chroma_dir, r.model_name, r.top_k, r.chunk_size, r.chunk_overlap,
+         r.temperature, r.created_at, r.updated_at,
+         COUNT(f.id) AS file_count
+     FROM study_rooms r
+     LEFT JOIN room_files f ON f.room_id = r.id
+     WHERE r.user_id = ?
+     GROUP BY r.id
+     ORDER BY datetime(r.updated_at) DESC, r.id DESC
         LIMIT ?
         """,
-        (user_id, mode, limit),
+        (user_id, limit),
     ).fetchall()
     conn.close()
     return rows
 
 
-def clear_user_history(user_id: int, mode: str = "chat") -> None:
+def add_room_file(room_id: int, file_name: str, file_path: str) -> None:
     conn = get_conn()
     conn.execute(
-        "DELETE FROM chat_history WHERE user_id = ? AND mode = ?",
-        (user_id, mode),
+        "INSERT INTO room_files (room_id, file_name, file_path) VALUES (?, ?, ?)",
+        (room_id, file_name, file_path),
     )
     conn.commit()
     conn.close()
+
+
+def get_room_files(room_id: int) -> list[sqlite3.Row]:
+    conn = get_conn()
+    rows = conn.execute(
+        """
+        SELECT file_name, file_path, uploaded_at
+        FROM room_files
+        WHERE room_id = ?
+        ORDER BY datetime(uploaded_at) ASC, id ASC
+        """,
+        (room_id,),
+    ).fetchall()
+    conn.close()
+    return rows

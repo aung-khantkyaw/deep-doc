@@ -1,4 +1,4 @@
-"""DeepDoc — NotebookLM-style PDF study assistant with user auth.
+"""DeepDoc - AI-Powered Document Intelligence — NotebookLM-style PDF study assistant with user auth.
 
 Roles:
   admin — can change system settings (model, retrieval params) + all user features
@@ -15,17 +15,25 @@ import streamlit as st
 from dotenv import load_dotenv
 
 from auth.database import (
+    add_room_file,
+    create_study_room,
     init_db,
-    save_message,
-    get_user_history,
     clear_user_history,
+    get_room_files,
+    get_study_room,
+    get_user_history,
+    list_user_study_rooms,
+    save_message,
+    touch_study_room,
 )
 from auth.manager import (
+    change_password,
     register,
     login,
     create_default_admin,
     get_system_settings,
     save_system_settings,
+    update_profile,
 )
 from engine.processor import process_pdf
 from engine.retriever import build_hybrid_retriever
@@ -46,13 +54,148 @@ CHROMA_DIR: str      = os.getenv("CHROMA_PERSIST_DIR", "data/chroma_db")
 MODEL_OPTIONS = [
     "llama3.1:8b",
     "llama3.2:3b",
-    "mistral:7b",
     "phi3:mini",
-    "phi4:14b",
-    "gemma2:9b",
-    "qwen2.5:7b",
-    "deepseek-r1:7b",
 ]
+
+FILE_AI_ICON_SVG = (
+    '<svg xmlns="http://www.w3.org/2000/svg" width="26" height="26" viewBox="0 0 24 24" '
+    'fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" '
+    'stroke-linejoin="round" class="icon icon-tabler icons-tabler-outline icon-tabler-file-ai">'
+    '<path stroke="none" d="M0 0h24v24H0z" fill="none"/>'
+    '<path d="M14 3v4a1 1 0 0 0 1 1h4" />'
+    '<path d="M10 21h-3a2 2 0 0 1 -2 -2v-14a2 2 0 0 1 2 -2h7l5 5v4" />'
+    '<path d="M14 21v-4a2 2 0 1 1 4 0v4" />'
+    '<path d="M14 19h4" />'
+    '<path d="M21 15v6" />'
+    '</svg>'
+)
+
+
+def inject_custom_styles() -> None:
+    """Apply custom card-style UI for sidebar and key blocks."""
+    st.markdown(
+        """
+        <style>
+        :root {
+            --dd-sidebar-bg-start: var(--secondary-background-color);
+            --dd-sidebar-bg-end: var(--secondary-background-color);
+            --dd-sidebar-border: rgba(148, 163, 184, 0.24);
+            --dd-sidebar-text: var(--text-color);
+            --dd-btn-bg: rgba(148, 163, 184, 0.16);
+            --dd-btn-text: var(--text-color);
+            --dd-btn-hover-bg: rgba(148, 163, 184, 0.28);
+            --dd-tertiary-text: var(--text-color);
+            --dd-tertiary-hover-text: var(--text-color);
+            --dd-input-bg: rgba(15, 23, 42, 0.75);
+            --dd-input-border: rgba(148, 163, 184, 0.25);
+            --dd-expander-bg: rgba(15, 23, 42, 0.22);
+            --dd-expander-border: rgba(148, 163, 184, 0.28);
+        }
+
+        [data-theme="light"] {
+            --dd-sidebar-text: #111827;
+            --dd-btn-text: #111827;
+            --dd-tertiary-text: #111827;
+            --dd-tertiary-hover-text: #111827;
+        }
+
+        [data-testid="stSidebar"] {
+            background: linear-gradient(180deg, var(--dd-sidebar-bg-start) 0%, var(--dd-sidebar-bg-end) 100%) !important;
+            border-right: 1px solid var(--dd-sidebar-border);
+        }
+
+        [data-testid="stSidebar"] > div:first-child {
+            background: linear-gradient(180deg, var(--dd-sidebar-bg-start) 0%, var(--dd-sidebar-bg-end) 100%) !important;
+        }
+
+        [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p,
+        [data-testid="stSidebar"] label,
+        [data-testid="stSidebar"] span {
+            color: var(--dd-sidebar-text);
+        }
+
+        [data-testid="stSidebar"] [data-testid="stButton"] > button {
+            border-radius: 12px;
+            border: none;
+            margin: 2px 0;
+            background: var(--dd-btn-bg);
+            color: var(--dd-btn-text);
+            transition: all 0.15s ease;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        [data-testid="stSidebar"] [data-testid="stButton"] > button:hover {
+            border: none;
+            background: var(--dd-btn-hover-bg);
+        }
+
+        [data-testid="stSidebar"] [data-testid="stButton"] > button[kind="tertiary"] {
+            border: none;
+            background: transparent;
+            color: var(--dd-tertiary-text);
+        }
+
+        [data-testid="stSidebar"] [data-testid="stButton"] > button[kind="tertiary"]:hover {
+            border: none;
+            background: transparent;
+            color: var(--dd-tertiary-hover-text);
+        }
+
+        [data-testid="stSidebar"] [data-testid="stButton"] > button[kind="secondary"] {
+            border: none;
+            background: var(--dd-btn-bg);
+            color: var(--dd-btn-text);
+        }
+
+        [data-testid="stSidebar"] [data-testid="stButton"] > button[kind="primary"] {
+            border: 1px solid rgba(239, 68, 68, 0.8);
+            color: var(--dd-btn-text);
+            background: rgba(127, 29, 29, 0.2);
+        }
+
+        [data-testid="stSidebar"] [data-testid="stButton"] > button[kind="primary"]:hover {
+            border: 1px solid rgba(248, 113, 113, 0.95);
+            color: var(--dd-btn-text);
+            background: rgba(153, 27, 27, 0.3);
+        }
+
+        [data-theme="light"] [data-testid="stSidebar"] [data-testid="stButton"] > button[kind="primary"] {
+            border: 1px solid rgba(217, 119, 6, 0.9);
+            color: var(--dd-btn-text);
+            background: rgba(255, 237, 213, 0.95);
+        }
+
+        [data-theme="light"] [data-testid="stSidebar"] [data-testid="stButton"] > button[kind="primary"]:hover {
+            border: 1px solid rgba(180, 83, 9, 0.95);
+            color: var(--dd-btn-text);
+            background: rgba(254, 215, 170, 0.95);
+        }
+
+        [data-testid="stSidebar"] [data-testid="stSelectbox"],
+        [data-testid="stSidebar"] [data-testid="stSlider"],
+        [data-testid="stSidebar"] [data-testid="stRadio"] {
+            padding: 10px 12px;
+            border-radius: 12px;
+            border: 1px solid var(--dd-input-border);
+            background: var(--dd-input-bg);
+            margin-bottom: 8px;
+        }
+
+        [data-testid="stSidebar"] hr {
+            border-color: var(--dd-input-border);
+        }
+
+        [data-testid="stExpander"] {
+            border: 1px solid var(--dd-expander-border);
+            border-radius: 14px;
+            background: var(--dd-expander-bg);
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
 # ---------------------------------------------------------------------------
 # Bootstrap DB once per process
@@ -71,9 +214,11 @@ def initialize_state() -> None:
         # Auth
         "user": None,             # dict: {id, username, email, role} | None
         "auth_page": "login",     # 'login' | 'register'
+        "active_page": "chat",    # 'chat' | 'settings'
         # RAG
         "chat_history": [],
         "retriever": None,
+        "current_room_id": None,
         "processed": False,
         "quiz_questions": [],
         "quiz_idx": 0,
@@ -94,6 +239,118 @@ def is_admin() -> bool:
     return is_logged_in() and st.session_state.user["role"] == "admin"
 
 
+def _reset_runtime_state(keep_room: bool = True) -> None:
+    old_retriever = st.session_state.get("retriever")
+    st.session_state.retriever = None
+    if old_retriever is not None:
+        del old_retriever
+    gc.collect()
+
+    st.session_state.chat_history = []
+    st.session_state.quiz_questions = []
+    st.session_state.quiz_idx = 0
+    st.session_state.quiz_active = False
+    st.session_state.quiz_context = ""
+    st.session_state.processed = False
+    st.session_state.process_trace = None
+    if not keep_room:
+        st.session_state.current_room_id = None
+
+
+def load_study_room(room_id: int) -> tuple[bool, str]:
+    user_id = st.session_state.user["id"]
+    room = get_study_room(room_id, user_id)
+    if room is None:
+        return False, "Study room not found."
+
+    file_rows = get_room_files(room_id)
+    if not file_rows:
+        return False, "No files found in this study room."
+
+    _reset_runtime_state(keep_room=True)
+
+    all_chunks = []
+    per_file_stats: list[dict] = []
+    for rf in file_rows:
+        file_path = rf["file_path"]
+        if not os.path.exists(file_path):
+            continue
+        chunks = process_pdf(
+            file_path,
+            chunk_size=int(room["chunk_size"]),
+            chunk_overlap=int(room["chunk_overlap"]),
+        )
+        all_chunks.extend(chunks)
+        per_file_stats.append(
+            {
+                "file_name": rf["file_name"],
+                "saved_path": file_path,
+                "chunk_count": len(chunks),
+            }
+        )
+
+    if not all_chunks:
+        return False, "Could not load chunks from the files in this room."
+
+    chroma_dir = room["chroma_dir"]
+    os.makedirs(chroma_dir, exist_ok=True)
+    st.session_state.retriever = build_hybrid_retriever(
+        all_chunks,
+        persist_dir=chroma_dir,
+        top_k=int(room["top_k"]),
+    )
+    st.session_state.current_room_id = room_id
+    st.session_state.processed = True
+    st.session_state.chat_history = [
+        {"role": r["role"], "content": r["content"]}
+        for r in get_user_history(user_id, mode="chat", room_id=room_id)
+    ]
+    st.session_state.process_trace = {
+        "uploaded_files": [r["file_name"] for r in file_rows],
+        "per_file_stats": per_file_stats,
+        "total_files": len(file_rows),
+        "total_chunks": len(all_chunks),
+        "model_name": room["model_name"],
+        "top_k": int(room["top_k"]),
+        "chunk_size": int(room["chunk_size"]),
+        "chunk_overlap": int(room["chunk_overlap"]),
+        "bm25_weight": 0.4,
+        "vector_weight": 0.6,
+        "chroma_dir": chroma_dir,
+    }
+    return True, f"Loaded room: {room['title']}"
+
+
+def render_room_timeline() -> None:
+    user_id = st.session_state.user["id"]
+    rooms = list_user_study_rooms(user_id)
+
+    if not rooms:
+        st.sidebar.caption("No chats yet. Upload a PDF to create one.")
+        return
+
+    current_room_id = st.session_state.get("current_room_id")
+    for room in rooms:
+        room_id = int(room["id"])
+        is_current = room_id == current_room_id
+        updated_at = room["updated_at"]
+        file_count = int(room["file_count"] or 0)
+        label = f"{room['title']} · {updated_at} · {file_count} file(s)"
+        if st.sidebar.button(
+            label,
+            key=f"room_select_{room_id}",
+            type="secondary" if is_current else "tertiary",
+            use_container_width=True,
+        ):
+            ok, msg = load_study_room(room_id)
+            if ok:
+                st.sidebar.success(msg)
+                st.session_state.active_page = "chat"
+            else:
+                st.sidebar.error(msg)
+            st.rerun()
+
+
 # ---------------------------------------------------------------------------
 # Auth pages
 # ---------------------------------------------------------------------------
@@ -101,7 +358,7 @@ def is_admin() -> bool:
 def render_login_page() -> None:
     col = st.columns([1, 2, 1])[1]
     with col:
-        st.markdown("## 📄 DeepDoc")
+        st.markdown("## DeepDoc - AI-Powered Document Intelligence")
         st.caption("Sign in to continue")
         st.markdown("---")
 
@@ -112,10 +369,13 @@ def render_login_page() -> None:
             ok, msg, user = login(username, password)
             if ok:
                 st.session_state.user = user
-                st.session_state.chat_history = [
-                    {"role": r["role"], "content": r["content"]}
-                    for r in get_user_history(user["id"], mode="chat")
-                ]
+                st.session_state.active_page = "chat"
+                st.session_state.current_room_id = None
+                recent_rooms = list_user_study_rooms(user["id"], limit=1)
+                if recent_rooms:
+                    load_study_room(int(recent_rooms[0]["id"]))
+                else:
+                    _reset_runtime_state(keep_room=False)
                 st.success(msg)
                 st.rerun()
             else:
@@ -131,7 +391,7 @@ def render_login_page() -> None:
 def render_register_page() -> None:
     col = st.columns([1, 2, 1])[1]
     with col:
-        st.markdown("## 📄 DeepDoc — Register")
+        st.markdown("## DeepDoc - AI-Powered Document Intelligence — Register")
         st.markdown("---")
 
         username = st.text_input("Username")
@@ -152,7 +412,7 @@ def render_register_page() -> None:
                     st.error(msg)
 
         st.markdown("---")
-        if st.button("← Back to Login", use_container_width=True):
+        if st.button("Back to Login", use_container_width=True):
             st.session_state.auth_page = "login"
             st.rerun()
 
@@ -161,26 +421,45 @@ def render_register_page() -> None:
 # Sidebar
 # ---------------------------------------------------------------------------
 
-def render_sidebar() -> tuple[str, int, float, int]:
+def render_sidebar() -> None:
     user = st.session_state.user
-    settings = get_system_settings()
 
-    fast_model = "llama3.2:3b"
-    quality_model = "llama3.1:8b"
+    st.sidebar.markdown(
+        (
+            '<div style="display:flex;align-items:center;gap:8px;color:var(--text-color);margin-bottom:50px;">'
+            f"{FILE_AI_ICON_SVG}"
+            '<span style="font-size:2rem;font-weight:700;line-height:1;">DeepDoc</span>'
+            '</div>'
+        ),
+        unsafe_allow_html=True,
+    )
+    # st.sidebar.markdown(f"User: **{user['username']}** `{user['role']}`")
 
-    st.sidebar.title("📄 DeepDoc")
-    st.sidebar.markdown(f"👤 **{user['username']}** `{user['role']}`")
+    if st.sidebar.button("New Chat", use_container_width=True):
+        _reset_runtime_state(keep_room=False)
+        st.session_state.active_page = "chat"
+        st.rerun()
 
-    if st.sidebar.button("Logout", use_container_width=True):
+    st.sidebar.markdown("### Chats")
+    render_room_timeline()
+
+    st.sidebar.markdown("---")
+    if st.sidebar.button("Setting & Help", use_container_width=True):
+        st.session_state.active_page = "settings"
+        st.rerun()
+
+    if st.sidebar.button("Logout", use_container_width=True, type="primary"):
         for key in list(st.session_state.keys()):
             del st.session_state[key]
         st.rerun()
 
-    st.sidebar.markdown("---")
 
-    # ── Admin: editable settings ─────────────────────────────────────────
+def render_upload_settings_panel() -> tuple[str, int, float, int]:
+    settings = get_system_settings()
+    fast_model = "llama3.2:3b"
+    quality_model = "llama3.1:8b"
+
     if is_admin():
-        st.sidebar.subheader("⚙️ System Settings")
 
         fast_preset = {
             "model_name": fast_model,
@@ -202,11 +481,18 @@ def render_sidebar() -> tuple[str, int, float, int]:
         else:
             default_mode = "Custom"
 
-        performance_mode = st.sidebar.radio(
+        mode_key = "performance_mode"
+        if mode_key not in st.session_state:
+            st.session_state[mode_key] = default_mode
+        elif st.session_state[mode_key] not in {"Fast", "Quality", "Custom"}:
+            st.session_state[mode_key] = default_mode
+
+        performance_mode = st.radio(
             "Performance Mode",
             options=["Fast", "Quality", "Custom"],
-            index=["Fast", "Quality", "Custom"].index(default_mode),
-            help="Fast: quicker responses on CPU · Quality: better answer quality · Custom: choose any model",
+            key=mode_key,
+            horizontal=True,
+            help="Choose performance profile for this room",
         )
 
         if performance_mode == "Fast":
@@ -215,117 +501,134 @@ def render_sidebar() -> tuple[str, int, float, int]:
             temperature = fast_preset["temperature"]
             chunk_size = fast_preset["chunk_size"]
             chunk_overlap = settings["chunk_overlap"]
-
-            needs_apply = (
+            if (
                 settings["model_name"] != model_name
                 or settings["top_k"] != top_k
                 or settings["temperature"] != temperature
                 or settings["chunk_size"] != chunk_size
-            )
-            if needs_apply:
+            ):
                 save_system_settings(model_name, top_k, temperature, chunk_size, chunk_overlap)
-                settings = get_system_settings()
-                st.sidebar.success("Fast preset auto-applied.")
 
-            st.sidebar.write(f"- Model: `{model_name}`")
-            st.sidebar.write(f"- Top K: `{top_k}`")
-            st.sidebar.write(f"- Temperature: `{temperature}`")
-            st.sidebar.write(f"- Chunk Size: `{chunk_size}`")
-            st.sidebar.caption("Preset is auto-applied in this mode.")
-        elif performance_mode == "Quality":
+            st.caption(f"Model `{model_name}` · TopK `{top_k}` · Chunk `{chunk_size}`")
+            return model_name, top_k, temperature, chunk_size
+
+        if performance_mode == "Quality":
             model_name = quality_preset["model_name"]
             top_k = quality_preset["top_k"]
             temperature = quality_preset["temperature"]
             chunk_size = quality_preset["chunk_size"]
             chunk_overlap = settings["chunk_overlap"]
-
-            needs_apply = (
+            if (
                 settings["model_name"] != model_name
                 or settings["top_k"] != top_k
                 or settings["temperature"] != temperature
                 or settings["chunk_size"] != chunk_size
-            )
-            if needs_apply:
+            ):
                 save_system_settings(model_name, top_k, temperature, chunk_size, chunk_overlap)
-                settings = get_system_settings()
-                st.sidebar.success("Quality preset auto-applied.")
 
-            st.sidebar.write(f"- Model: `{model_name}`")
-            st.sidebar.write(f"- Top K: `{top_k}`")
-            st.sidebar.write(f"- Temperature: `{temperature}`")
-            st.sidebar.write(f"- Chunk Size: `{chunk_size}`")
-            st.sidebar.caption("Preset is auto-applied in this mode.")
-        else:
-            model_name = st.sidebar.selectbox(
-                "LLM Model",
-                options=MODEL_OPTIONS,
-                index=MODEL_OPTIONS.index(settings["model_name"])
-                if settings["model_name"] in MODEL_OPTIONS
-                else 0,
-            )
-            top_k = st.sidebar.slider("Top K Chunks", 1, 10, settings["top_k"])
-            chunk_size = st.sidebar.select_slider(
-                "Chunk Size (tokens)", [256, 512, 768, 1024], settings["chunk_size"]
-            )
-            temperature = st.sidebar.slider(
-                "Temperature", 0.0, 1.0, settings["temperature"], step=0.05
-            )
-            chunk_overlap = settings["chunk_overlap"]
+            st.caption(f"Model `{model_name}` · TopK `{top_k}` · Chunk `{chunk_size}`")
+            return model_name, top_k, temperature, chunk_size
 
-            if st.sidebar.button("💾 Save Settings", use_container_width=True):
-                save_system_settings(model_name, top_k, temperature, chunk_size, chunk_overlap)
-                st.sidebar.success("Settings saved.")
+        model_name = st.selectbox(
+            "LLM Model",
+            options=MODEL_OPTIONS,
+            index=MODEL_OPTIONS.index(settings["model_name"])
+            if settings["model_name"] in MODEL_OPTIONS
+            else 0,
+        )
+        top_k = st.slider("Top K Chunks", 1, 10, settings["top_k"])
+        chunk_size = st.select_slider(
+            "Chunk Size (tokens)", [256, 512, 768, 1024], settings["chunk_size"]
+        )
+        temperature = st.slider(
+            "Temperature", 0.0, 1.0, settings["temperature"], step=0.05
+        )
+        chunk_overlap = settings["chunk_overlap"]
 
-    # ── User: read-only display ──────────────────────────────────────────
-    else:
-        model_name  = settings["model_name"]
-        top_k       = settings["top_k"]
-        temperature = settings["temperature"]
-        chunk_size  = settings["chunk_size"]
+        if st.button("Save Settings", use_container_width=True):
+            save_system_settings(model_name, top_k, temperature, chunk_size, chunk_overlap)
+            st.success("Settings saved")
 
-        st.sidebar.subheader("⚙️ System Settings")
-        if model_name == fast_model:
-            mode_label = "Fast"
-        elif model_name == quality_model:
-            mode_label = "Quality"
-        else:
-            mode_label = "Custom"
-        st.sidebar.write(f"- Mode: `{mode_label}`")
-        st.sidebar.write(f"- Model: `{model_name}`")
-        st.sidebar.write(f"- Top K: `{top_k}`")
-        st.sidebar.write(f"- Temperature: `{temperature}`")
-        st.sidebar.write(f"- Chunk Size: `{chunk_size}`")
-        st.sidebar.caption("Settings are managed by admin.")
+        return model_name, top_k, temperature, chunk_size
 
-    st.sidebar.markdown("---")
-    if st.session_state.processed:
-        st.sidebar.success("✅ Document loaded")
-    else:
-        st.sidebar.warning("⚠️ No document loaded")
-
+    model_name = settings["model_name"]
+    top_k = settings["top_k"]
+    temperature = settings["temperature"]
+    chunk_size = settings["chunk_size"]
+    st.markdown("###### Performance Mode")
+    st.caption(f"Model `{model_name}` · TopK `{top_k}` · Temperature `{temperature}` · Chunk `{chunk_size}`")
+    st.caption("Read-only. Admin can change settings.")
     return model_name, top_k, temperature, chunk_size
+
+
+def render_settings_page() -> None:
+    user = st.session_state.user
+    st.title("Setting & Help")
+    st.caption("Manage your account profile and password")
+
+    with st.form("profile_form"):
+        st.markdown("#### Profile")
+        new_username = st.text_input("Username", value=user["username"])
+        new_email = st.text_input("Email", value=user["email"])
+        save_profile = st.form_submit_button("Save Profile", type="primary")
+
+    if save_profile:
+        ok, msg, updated_user = update_profile(user["id"], new_username, new_email)
+        if ok and updated_user is not None:
+            st.session_state.user = updated_user
+            st.success(msg)
+        else:
+            st.error(msg)
+
+    with st.form("password_form"):
+        st.markdown("#### Change Password")
+        current_pw = st.text_input("Current Password", type="password")
+        new_pw = st.text_input("New Password", type="password")
+        confirm_pw = st.text_input("Confirm New Password", type="password")
+        save_password = st.form_submit_button("Update Password")
+
+    if save_password:
+        if new_pw != confirm_pw:
+            st.error("New password and confirm password do not match.")
+        else:
+            ok, msg = change_password(user["id"], current_pw, new_pw)
+            if ok:
+                st.success(msg)
+            else:
+                st.error(msg)
+
+    st.markdown("#### Help")
+    st.write("- Use **New Chat** in sidebar to start a fresh room with new files.")
+    st.write("- Use **Chats** in sidebar to continue previous room history.")
+    st.write("- Performance Mode is configured in the right side of Upload settings.")
+
+    if st.button("Back to Chat", use_container_width=False):
+        st.session_state.active_page = "chat"
+        st.rerun()
 
 
 # ---------------------------------------------------------------------------
 # Document processing
 # ---------------------------------------------------------------------------
 
-def process_documents(uploaded_files, chunk_size: int, top_k: int) -> None:
+def process_documents(
+    uploaded_files,
+    chunk_size: int,
+    top_k: int,
+    model_name: str,
+    temperature: float,
+) -> None:
     settings = get_system_settings()
     chunk_overlap = settings["chunk_overlap"]
     user_id = st.session_state.user["id"]
     user_chroma_root = os.path.join(CHROMA_DIR, f"user_{user_id}")
     user_chroma_dir = os.path.join(user_chroma_root, f"idx_{uuid4().hex[:12]}")
 
-    old_retriever = st.session_state.get("retriever")
-    st.session_state.retriever = None
-    if old_retriever is not None:
-        del old_retriever
-    gc.collect()
+    _reset_runtime_state(keep_room=True)
 
-    print("[DeepDoc] Process Documents requested")
+    print("[DeepDoc - AI-Powered Document Intelligence] Process Documents requested")
     print(
-        "[DeepDoc] System settings:",
+        "[DeepDoc - AI-Powered Document Intelligence] System settings:",
         {
             "model_name": settings.get("model_name"),
             "top_k": settings.get("top_k"),
@@ -335,7 +638,7 @@ def process_documents(uploaded_files, chunk_size: int, top_k: int) -> None:
         },
     )
     print(
-        "[DeepDoc] Effective process params:",
+        "[DeepDoc - AI-Powered Document Intelligence] Effective process params:",
         {
             "uploaded_files": [uf.name for uf in uploaded_files],
             "top_k": top_k,
@@ -350,6 +653,7 @@ def process_documents(uploaded_files, chunk_size: int, top_k: int) -> None:
 
     all_chunks = []
     per_file_stats: list[dict] = []
+    file_records: list[dict] = []
     for uf in uploaded_files:
         file_path = save_uploaded_file(uf, UPLOAD_DIR)
         chunks = process_pdf(file_path, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
@@ -361,10 +665,29 @@ def process_documents(uploaded_files, chunk_size: int, top_k: int) -> None:
                 "chunk_count": len(chunks),
             }
         )
+        file_records.append({"file_name": uf.name, "file_path": file_path})
+
+    room_title = (
+        uploaded_files[0].name if len(uploaded_files) == 1
+        else f"{uploaded_files[0].name} +{len(uploaded_files) - 1} more"
+    )
+    room_id = create_study_room(
+        user_id=user_id,
+        title=room_title,
+        chroma_dir=user_chroma_dir,
+        model_name=model_name,
+        top_k=top_k,
+        chunk_size=chunk_size,
+        chunk_overlap=chunk_overlap,
+        temperature=temperature,
+    )
+    for f in file_records:
+        add_room_file(room_id, f["file_name"], f["file_path"])
 
     st.session_state.retriever = build_hybrid_retriever(
         all_chunks, persist_dir=user_chroma_dir, top_k=top_k
     )
+    st.session_state.current_room_id = room_id
     st.session_state.processed = True
     st.session_state.chat_history = []
     st.session_state.quiz_questions = []
@@ -375,13 +698,15 @@ def process_documents(uploaded_files, chunk_size: int, top_k: int) -> None:
         "per_file_stats": per_file_stats,
         "total_files": len(uploaded_files),
         "total_chunks": len(all_chunks),
-        "model_name": settings.get("model_name"),
+        "model_name": model_name,
         "top_k": top_k,
         "chunk_size": chunk_size,
         "chunk_overlap": chunk_overlap,
         "bm25_weight": 0.4,
         "vector_weight": 0.6,
         "chroma_dir": user_chroma_dir,
+        "room_id": room_id,
+        "room_title": room_title,
     }
 
     for entry in os.listdir(user_chroma_root):
@@ -395,8 +720,12 @@ def process_documents(uploaded_files, chunk_size: int, top_k: int) -> None:
                 pass
 
     print(
-        "[DeepDoc] Processing complete:",
-        {"total_chunks": len(all_chunks), "processed": st.session_state.processed},
+        "[DeepDoc - AI-Powered Document Intelligence] Processing complete:",
+        {
+            "total_chunks": len(all_chunks),
+            "processed": st.session_state.processed,
+            "room_id": room_id,
+        },
     )
 
 
@@ -407,18 +736,29 @@ def process_documents(uploaded_files, chunk_size: int, top_k: int) -> None:
 def chat_tab(model_name: str, temperature: float) -> None:
     user_id = st.session_state.user["id"]
     username = st.session_state.user.get("username", "unknown")
+    room_id = st.session_state.get("current_room_id")
+    ready = bool(st.session_state.processed)
 
-    if not st.session_state.processed:
+    if not ready:
         st.info("Upload and process a PDF to start chatting.")
-        return
 
-    for msg in st.session_state.chat_history:
-        display_chat_message(msg["role"], msg["content"])
+    bubble_group = st.container(border=True)
+    with bubble_group:
+        for msg in st.session_state.chat_history:
+            display_chat_message(msg["role"], msg["content"])
 
-    question = st.chat_input("Ask anything about the document…")
-    if question:
+        if st.session_state.chat_history:
+            if st.button("Clear Chat History", key="clear_chat_history"):
+                clear_user_history(user_id, mode="chat", room_id=room_id)
+                st.session_state.chat_history = []
+                st.rerun()
+        else:
+            st.caption("No messages yet.")
+
+    question = st.chat_input("Ask anything about the document…", disabled=not ready)
+    if question and ready:
         print(
-            "[DeepDoc][Chat] User question:",
+            "[DeepDoc - AI-Powered Document Intelligence][Chat] User question:",
             {
                 "user_id": user_id,
                 "username": username,
@@ -429,9 +769,10 @@ def chat_tab(model_name: str, temperature: float) -> None:
             },
         )
 
-        display_chat_message("user", question)
+        with bubble_group:
+            display_chat_message("user", question)
         st.session_state.chat_history.append({"role": "user", "content": question})
-        save_message(user_id, "chat", "user", question)
+        save_message(user_id, "chat", "user", question, room_id=room_id)
 
         with st.spinner("Thinking…"):
             docs = st.session_state.retriever.invoke(question)
@@ -440,7 +781,7 @@ def chat_tab(model_name: str, temperature: float) -> None:
             debug_info = getattr(st.session_state.retriever, "last_debug_info", None)
             if isinstance(debug_info, dict):
                 print(
-                    "[DeepDoc][Retrieval] Trace:",
+                    "[DeepDoc - AI-Powered Document Intelligence][Retrieval] Trace:",
                     {
                         "user_id": user_id,
                         "username": username,
@@ -462,11 +803,17 @@ def chat_tab(model_name: str, temperature: float) -> None:
             answer = chain.invoke({"context": context, "question": question})
 
         debug_info = getattr(st.session_state.retriever, "last_debug_info", None)
-        with st.expander("🔍 BM25 + Vector Trace", expanded=False):
+        with st.expander("BM25 + Vector Trace", expanded=False):
             if isinstance(debug_info, dict):
                 st.markdown("**Step 1 · Query**")
                 st.write(f"- Original: `{debug_info.get('original_query', '')}`")
                 st.write(f"- Normalized: `{debug_info.get('normalized_query', '')}`")
+                bm25_tokens = debug_info.get("bm25_query_tokens", [])
+                if isinstance(bm25_tokens, list):
+                    st.write(f"- BM25 n-gram tokens: `{len(bm25_tokens)}`")
+                    st.caption(
+                        "Sample: " + ", ".join(str(tok) for tok in bm25_tokens[:20])
+                    )
 
                 st.markdown("**Step 2 · Retrieve**")
                 st.write(
@@ -499,7 +846,7 @@ def chat_tab(model_name: str, temperature: float) -> None:
             st.write(f"- Model: `{model_name}` · Temperature: `{temperature}`")
 
         print(
-            "[DeepDoc][Chat] Assistant response:",
+            "[DeepDoc - AI-Powered Document Intelligence][Chat] Assistant response:",
             {
                 "user_id": user_id,
                 "username": username,
@@ -508,15 +855,13 @@ def chat_tab(model_name: str, temperature: float) -> None:
             },
         )
 
-        display_chat_message("assistant", answer)
+        with bubble_group:
+            display_chat_message("assistant", answer)
         st.session_state.chat_history.append({"role": "assistant", "content": answer})
-        save_message(user_id, "chat", "assistant", answer)
-
-    if st.session_state.chat_history:
-        if st.button("🗑️ Clear Chat History"):
-            clear_user_history(user_id, mode="chat")
-            st.session_state.chat_history = []
-            st.rerun()
+        save_message(user_id, "chat", "assistant", answer, room_id=room_id)
+        if room_id is not None:
+            touch_study_room(room_id)
+        st.rerun()
 
 
 # ---------------------------------------------------------------------------
@@ -525,6 +870,7 @@ def chat_tab(model_name: str, temperature: float) -> None:
 
 def quiz_tab(model_name: str, temperature: float) -> None:
     user_id = st.session_state.user["id"]
+    room_id = st.session_state.get("current_room_id")
 
     if not st.session_state.processed:
         st.info("Upload and process a PDF to start a quiz.")
@@ -538,7 +884,7 @@ def quiz_tab(model_name: str, temperature: float) -> None:
         with col2:
             st.write("")
             st.write("")
-            gen = st.button("Generate ✨", use_container_width=True, type="primary")
+            gen = st.button("Generate", use_container_width=True, type="primary")
 
         if gen:
             with st.spinner("Generating questions from document…"):
@@ -577,11 +923,11 @@ def quiz_tab(model_name: str, temperature: float) -> None:
 
         col_submit, col_skip, col_quit = st.columns([2, 1, 1])
         with col_submit:
-            submit = st.button("✅ Submit Answer", type="primary", use_container_width=True)
+            submit = st.button("Submit Answer", type="primary", use_container_width=True)
         with col_skip:
-            skip = st.button("⏭️ Skip", use_container_width=True)
+            skip = st.button("Skip", use_container_width=True)
         with col_quit:
-            quit_quiz = st.button("🚪 End Quiz", use_container_width=True)
+            quit_quiz = st.button("End Quiz", use_container_width=True)
 
         if quit_quiz:
             st.session_state.quiz_active = False
@@ -592,7 +938,7 @@ def quiz_tab(model_name: str, temperature: float) -> None:
                 st.session_state.quiz_idx += 1
                 st.rerun()
             else:
-                st.success("🎉 You have reached the end of the quiz!")
+                st.success("You have reached the end of the quiz!")
                 if st.button("Start New Quiz"):
                     st.session_state.quiz_active = False
                     st.rerun()
@@ -609,11 +955,13 @@ def quiz_tab(model_name: str, temperature: float) -> None:
                         "context": st.session_state.quiz_context,
                     })
 
-                save_message(user_id, "quiz", "user",      questions[idx])
-                save_message(user_id, "quiz", "assistant", feedback)
+                save_message(user_id, "quiz", "user", questions[idx], room_id=room_id)
+                save_message(user_id, "quiz", "assistant", feedback, room_id=room_id)
+                if room_id is not None:
+                    touch_study_room(room_id)
 
                 st.markdown("---")
-                st.markdown("#### 📝 Feedback")
+                st.markdown("#### Feedback")
                 st.markdown(feedback)
                 st.markdown("---")
 
@@ -622,7 +970,7 @@ def quiz_tab(model_name: str, temperature: float) -> None:
                         st.session_state.quiz_idx += 1
                         st.rerun()
                 else:
-                    st.success("🎉 You have completed all questions!")
+                    st.success("You have completed all questions!")
                     if st.button("Start New Quiz"):
                         st.session_state.quiz_active = False
                         st.rerun()
@@ -634,11 +982,12 @@ def quiz_tab(model_name: str, temperature: float) -> None:
 
 def main() -> None:
     st.set_page_config(
-        page_title="DeepDoc",
-        page_icon="📄",
+        page_title="DeepDoc - AI-Powered Document Intelligence",
+        page_icon="D",
         layout="wide",
         initial_sidebar_state="expanded",
     )
+    inject_custom_styles()
     initialize_state()
 
     # ── Auth gate ─────────────────────────────────────────────────────────
@@ -650,37 +999,67 @@ def main() -> None:
         return
 
     # ── Authenticated ─────────────────────────────────────────────────────
-    st.title("📄 DeepDoc")
+    st.markdown(
+        (
+            '<div style="display:flex;align-items:center;gap:10px;margin-bottom:4px;">'
+            f"{FILE_AI_ICON_SVG}"
+            '<h1 style="margin:0;font-size:2rem;">DeepDoc - AI-Powered Document Intelligence</h1>'
+            '</div>'
+        ),
+        unsafe_allow_html=True,
+    )
     st.caption(
         "Chat with your PDFs · Study with AI-generated quizzes · "
         "Powered by Ollama + BM25 + Vector Search"
     )
 
-    model_name, top_k, temperature, chunk_size = render_sidebar()
+    render_sidebar()
+
+    if st.session_state.get("active_page") == "settings":
+        render_settings_page()
+        return
+
+    settings = get_system_settings()
+    model_name = settings["model_name"]
+    top_k = settings["top_k"]
+    temperature = settings["temperature"]
+    chunk_size = settings["chunk_size"]
 
     with st.expander(
-        "📂 Upload & Process PDF",
-        expanded=not st.session_state.processed,
+        "Upload & Process PDF",
+        expanded=True,
     ):
-        uploaded_files = st.file_uploader(
-            "Upload one or more PDF files",
-            type=["pdf"],
-            accept_multiple_files=True,
-        )
+        col_upload, col_settings = st.columns([2, 1])
 
-        if uploaded_files:
-            for uf in uploaded_files:
-                st.write(f"• {uf.name}")
+        with col_settings:
+            model_name, top_k, temperature, chunk_size = render_upload_settings_panel()
 
-            if st.button("⚙️ Process Documents", type="primary", use_container_width=True):
-                with st.spinner("Loading PDFs → Chunking → Building BM25 + Vector index…"):
-                    process_documents(uploaded_files, chunk_size, top_k)
-                st.success(f"✅ {len(uploaded_files)} file(s) indexed and ready!")
-                st.rerun()
+        with col_upload:
+            uploaded_files = st.file_uploader(
+                "Upload one or more PDF files",
+                type=["pdf"],
+                accept_multiple_files=True,
+            )
+
+            if uploaded_files:
+                # for uf in uploaded_files:
+                #     st.write(f"• {uf.name}")
+
+                if st.button("Process Documents", type="primary", use_container_width=True):
+                    with st.spinner("Loading PDFs → Chunking → Building BM25 + Vector index…"):
+                        process_documents(
+                            uploaded_files,
+                            chunk_size,
+                            top_k,
+                            model_name,
+                            temperature,
+                        )
+                    st.success(f"{len(uploaded_files)} file(s) indexed and ready!")
+                    st.rerun()
 
         process_trace = st.session_state.get("process_trace")
         if isinstance(process_trace, dict):
-            with st.expander("🔎 Processing Trace", expanded=False):
+            with st.expander("Processing Trace", expanded=False):
                 st.markdown("**Step 1 · Input Files**")
                 st.write(f"- Total files: `{process_trace.get('total_files', 0)}`")
                 for i, file_name in enumerate(process_trace.get("uploaded_files", []), start=1):
@@ -702,7 +1081,7 @@ def main() -> None:
                 st.write(f"- Chroma DB: `{process_trace.get('chroma_dir', '')}`")
                 st.write(f"- Active Model: `{process_trace.get('model_name', '')}`")
 
-    tab_chat, tab_quiz = st.tabs(["💬 Chat", "🎓 Quiz"])
+    tab_chat, tab_quiz = st.tabs(["Chat", "Quiz"])
 
     with tab_chat:
         chat_tab(model_name, temperature)

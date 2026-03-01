@@ -19,6 +19,35 @@ from langchain_core.retrievers import BaseRetriever
 EMBED_MODEL = "all-MiniLM-L6-v2"
 
 
+def _tokenize_for_bm25(text: str) -> list[str]:
+    """Normalize text and tokenize for BM25 preprocessing."""
+    normalized = re.sub(r"\s+", " ", re.sub(r"[^\w\s]", " ", text.lower())).strip()
+    return [tok for tok in normalized.split(" ") if tok]
+
+
+def _bm25_ngram_preprocess(text: str, min_n: int = 1, max_n: int = 3) -> list[str]:
+    """Return unigram + n-gram tokens for BM25.
+
+    Example: "polytechnic university maubin"
+      -> ["polytechnic", "university", "maubin",
+          "polytechnic_university", "university_maubin",
+          "polytechnic_university_maubin"]
+    """
+    tokens = _tokenize_for_bm25(text)
+    if not tokens:
+        return []
+
+    features: list[str] = []
+    upper_n = min(max_n, len(tokens))
+    for n in range(max(min_n, 1), upper_n + 1):
+        if n == 1:
+            features.extend(tokens)
+            continue
+        for i in range(len(tokens) - n + 1):
+            features.append("_".join(tokens[i : i + n]))
+    return features
+
+
 class HybridRetriever(BaseRetriever):
     """Reciprocal Rank Fusion of BM25 + vector retrievers."""
 
@@ -61,6 +90,7 @@ class HybridRetriever(BaseRetriever):
     ) -> list[Document]:
         """Retrieve from both, fuse with weighted RRF, return top-k."""
         normalized_query = self._normalize_query(query)
+        bm25_query_tokens = _bm25_ngram_preprocess(normalized_query)
         bm25_docs = self.bm25_retriever.invoke(normalized_query)
         vec_docs = self.vector_retriever.invoke(query)
 
@@ -84,6 +114,7 @@ class HybridRetriever(BaseRetriever):
         self.last_debug_info = {
             "original_query": query,
             "normalized_query": normalized_query,
+            "bm25_query_tokens": bm25_query_tokens,
             "bm25_weight": self.bm25_weight,
             "vector_weight": self.vector_weight,
             "bm25_count": len(bm25_docs),
@@ -130,7 +161,10 @@ def build_hybrid_retriever(
     vector_retriever = vectorstore.as_retriever(search_kwargs={"k": top_k})
 
     # 2. BM25 retriever (Okapi BM25 — n-gram term statistics)
-    bm25_retriever = BM25Retriever.from_documents(chunks)
+    bm25_retriever = BM25Retriever.from_documents(
+        chunks,
+        preprocess_func=_bm25_ngram_preprocess,
+    )
     bm25_retriever.k = top_k
 
     # 3. Fuse both with custom RRF
