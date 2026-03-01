@@ -177,19 +177,19 @@ Set variables in `.env` (minimum: `OLLAMA_BASE_URL`).
 
 ### Environment Variables
 
-| Variable | Default | Purpose |
-| --- | --- | --- |
-| `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama endpoint for chat + ollama embeddings |
-| `OLLAMA_MODEL` | `llama3.1:8b` | Default LLM seed value for first-run settings |
-| `DEFAULT_EMBEDDING_MODEL` | `all-MiniLM-L6-v2` | Default embedding seed value for first-run settings |
-| `OLLAMA_EMBED_MODEL` | `nomic-embed-text` | Ollama embedding model name when selected |
-| `HF_EMBED_MODEL` | `sentence-transformers/all-MiniLM-L6-v2` | HuggingFace embedding repo when selected |
-| `UPLOAD_DIR` | `data/uploads` | Uploaded PDF storage path |
-| `CHROMA_PERSIST_DIR` | `data/chroma_db` | Chroma persistence root |
-| `TOP_K` | `4` | Default top-k seed value for first-run settings |
-| `CHUNK_SIZE` | `512` | Default chunk size seed value for first-run settings |
-| `CHUNK_OVERLAP` | `80` | Default chunk overlap seed value for first-run settings |
-| `TEMPERATURE` | `0.2` | Default temperature seed value for first-run settings |
+| Variable                  | Default                                  | Purpose                                                 |
+| ------------------------- | ---------------------------------------- | ------------------------------------------------------- |
+| `OLLAMA_BASE_URL`         | `http://localhost:11434`                 | Ollama endpoint for chat + ollama embeddings            |
+| `OLLAMA_MODEL`            | `llama3.1:8b`                            | Default LLM seed value for first-run settings           |
+| `DEFAULT_EMBEDDING_MODEL` | `all-MiniLM-L6-v2`                       | Default embedding seed value for first-run settings     |
+| `OLLAMA_EMBED_MODEL`      | `nomic-embed-text`                       | Ollama embedding model name when selected               |
+| `HF_EMBED_MODEL`          | `sentence-transformers/all-MiniLM-L6-v2` | HuggingFace embedding repo when selected                |
+| `UPLOAD_DIR`              | `data/uploads`                           | Uploaded PDF storage path                               |
+| `CHROMA_PERSIST_DIR`      | `data/chroma_db`                         | Chroma persistence root                                 |
+| `TOP_K`                   | `4`                                      | Default top-k seed value for first-run settings         |
+| `CHUNK_SIZE`              | `512`                                    | Default chunk size seed value for first-run settings    |
+| `CHUNK_OVERLAP`           | `80`                                     | Default chunk overlap seed value for first-run settings |
+| `TEMPERATURE`             | `0.2`                                    | Default temperature seed value for first-run settings   |
 
 ## Offline Mode Checklist
 

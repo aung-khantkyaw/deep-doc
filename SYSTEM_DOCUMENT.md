@@ -228,19 +228,19 @@ Shows:
 
 ## 9) Environment Variables
 
-| Variable             | Default                  | Purpose         |
-| -------------------- | ------------------------ | --------------- |
-| `OLLAMA_BASE_URL`    | `http://localhost:11434` | Ollama endpoint |
-| `OLLAMA_MODEL`       | `llama3.1:8b`            | Default LLM seed for first-run system settings |
-| `DEFAULT_EMBEDDING_MODEL` | `all-MiniLM-L6-v2` | Default embedding seed for first-run system settings |
-| `OLLAMA_EMBED_MODEL` | `nomic-embed-text`       | Ollama embedding model name when selected |
-| `HF_EMBED_MODEL`     | `sentence-transformers/all-MiniLM-L6-v2` | HuggingFace embedding model repo when selected |
-| `UPLOAD_DIR`         | `data/uploads`           | PDF storage     |
-| `CHROMA_PERSIST_DIR` | `data/chroma_db`         | Chroma root     |
-| `TOP_K`              | `4`                      | Default top-k seed for first-run system settings |
-| `CHUNK_SIZE`         | `512`                    | Default chunk size seed for first-run system settings |
-| `CHUNK_OVERLAP`      | `80`                     | Default chunk overlap seed for first-run system settings |
-| `TEMPERATURE`        | `0.2`                    | Default temperature seed for first-run system settings |
+| Variable                  | Default                                  | Purpose                                                  |
+| ------------------------- | ---------------------------------------- | -------------------------------------------------------- |
+| `OLLAMA_BASE_URL`         | `http://localhost:11434`                 | Ollama endpoint                                          |
+| `OLLAMA_MODEL`            | `llama3.1:8b`                            | Default LLM seed for first-run system settings           |
+| `DEFAULT_EMBEDDING_MODEL` | `all-MiniLM-L6-v2`                       | Default embedding seed for first-run system settings     |
+| `OLLAMA_EMBED_MODEL`      | `nomic-embed-text`                       | Ollama embedding model name when selected                |
+| `HF_EMBED_MODEL`          | `sentence-transformers/all-MiniLM-L6-v2` | HuggingFace embedding model repo when selected           |
+| `UPLOAD_DIR`              | `data/uploads`                           | PDF storage                                              |
+| `CHROMA_PERSIST_DIR`      | `data/chroma_db`                         | Chroma root                                              |
+| `TOP_K`                   | `4`                                      | Default top-k seed for first-run system settings         |
+| `CHUNK_SIZE`              | `512`                                    | Default chunk size seed for first-run system settings    |
+| `CHUNK_OVERLAP`           | `80`                                     | Default chunk overlap seed for first-run system settings |
+| `TEMPERATURE`             | `0.2`                                    | Default temperature seed for first-run system settings   |
 
 ---
 
@@ -271,8 +271,10 @@ To run without internet after setup:
 
 1. Install dependencies at least once while online.
 2. Pull required Ollama models at least once:
-  - `llama3.1:8b`
-  - `nomic-embed-text`
+
+- `llama3.1:8b`
+- `nomic-embed-text`
+
 3. If using `all-MiniLM-L6-v2`, run one processing session online once to cache HuggingFace files.
 4. Ensure `OLLAMA_BASE_URL` points to local Ollama.
 
