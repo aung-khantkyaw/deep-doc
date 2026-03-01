@@ -1,6 +1,6 @@
 # DeepDoc - AI-Powered Document Intelligence
 
-DeepDoc is a local RAG study app for PDF files using Streamlit + Ollama.
+DeepDoc is a local RAG study app for PDF, DOCX, and TXT files using Streamlit + Ollama.
 
 ## Features
 
@@ -8,7 +8,7 @@ DeepDoc is a local RAG study app for PDF files using Streamlit + Ollama.
 - Role-based access:
   - **admin**: manage global settings (Performance + Embedding)
   - **user**: study with read-only settings
-- PDF upload and processing
+- Document upload and processing (PDF, DOCX, TXT)
 - Sidebar supports light/dark theme-aware styling
 - Hybrid retrieval via custom `HybridRetriever`:
   - BM25 (with custom n-gram preprocessing)
@@ -21,8 +21,8 @@ DeepDoc is a local RAG study app for PDF files using Streamlit + Ollama.
   - start new room by uploading new files
 - Chat bubbles are rendered in one grouped area
 - Chat input box is always shown below the bubble group (disabled until docs are processed)
-- **Upload & Process PDF** panel is always expanded
-- Upload settings in **Upload & Process PDF** are read-only (display current admin configuration)
+- **Upload & Process Documents** panel is always expanded
+- Upload settings in **Upload & Process Documents** are read-only (display current admin configuration)
 - UI traces:
   - Processing Trace
   - BM25 + Vector Retrieval Trace
@@ -65,7 +65,7 @@ This allows:
 
 ## How to use Study Rooms
 
-1. Upload PDF file(s) and click **Process Documents**.
+1. Upload document file(s) (PDF, DOCX, TXT) and click **Process Documents**.
 
 - DeepDoc creates a new study room automatically.
 
@@ -80,7 +80,7 @@ This allows:
 
 ## Retrieval Pipeline
 
-1. Parse PDF pages (`pypdf`)
+1. Parse document content (`pypdf` / `python-docx` / text loader)
 2. Split chunks (`RecursiveCharacterTextSplitter`)
 3. Build BM25 + vector retrievers
 4. Fuse rankings with weighted RRF
@@ -184,7 +184,7 @@ Set variables in `.env` (minimum: `OLLAMA_BASE_URL`).
 | `DEFAULT_EMBEDDING_MODEL` | `all-MiniLM-L6-v2`                       | Default embedding seed value for first-run settings     |
 | `OLLAMA_EMBED_MODEL`      | `nomic-embed-text`                       | Ollama embedding model name when selected               |
 | `HF_EMBED_MODEL`          | `sentence-transformers/all-MiniLM-L6-v2` | HuggingFace embedding repo when selected                |
-| `UPLOAD_DIR`              | `data/uploads`                           | Uploaded PDF storage path                               |
+| `UPLOAD_DIR`              | `data/uploads`                           | Uploaded file storage path                              |
 | `CHROMA_PERSIST_DIR`      | `data/chroma_db`                         | Chroma persistence root                                 |
 | `TOP_K`                   | `4`                                      | Default top-k seed value for first-run settings         |
 | `CHUNK_SIZE`              | `512`                                    | Default chunk size seed value for first-run settings    |

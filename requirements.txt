@@ -11,6 +11,7 @@ langchain-huggingface
 # NLP & Retrieval
 rank_bm25
 pypdf
+python-docx
 chromadb
 sentence-transformers
 

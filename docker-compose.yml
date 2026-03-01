@@ -1,5 +1,4 @@
 services:
-  # Ollama Service (LLM Engine)
   ollama:
     image: ollama/ollama:latest
     container_name: ollama
@@ -11,8 +10,12 @@ services:
     volumes:
       - ./ollama_data:/root/.ollama
     restart: always
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
 
-  # DeepDoc Streamlit App
   deepdoc_app:
     build: .
     container_name: deepdoc_ui
@@ -20,12 +23,14 @@ services:
       - "8501:8501"
     environment:
       - OLLAMA_BASE_URL=http://ollama:11434
+      - STREAMLIT_SERVER_FILE_WATCHER_TYPE=none
+      - STREAMLIT_SERVER_RUN_ON_SAVE=false
+      - STREAMLIT_BROWSER_GATHER_USAGE_STATS=false
     depends_on:
-      - ollama
-    volumes:
-      - .:/app
-    stdin_open: true
-    tty: true
+      ollama:
+        condition: service_healthy
+    command: streamlit run app.py --server.port=8501 --server.address=0.0.0.0 --server.fileWatcherType=none
+    restart: unless-stopped
 
 networks:
   default:

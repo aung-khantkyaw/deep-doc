@@ -1,14 +1,15 @@
-"""DeepDoc - AI-Powered Document Intelligence — NotebookLM-style PDF study assistant with user auth.
+"""DeepDoc - AI-Powered Document Intelligence — NotebookLM-style document study assistant with user auth.
 
 Roles:
   admin — can change system settings (model, retrieval params) + all user features
-  user  — can upload PDFs, chat, take quizzes; settings are read-only
+    user  — can upload documents, chat, take quizzes; settings are read-only
 """
 from __future__ import annotations
 
 import gc
 import os
 import shutil
+import time
 from uuid import uuid4
 
 import streamlit as st
@@ -35,7 +36,7 @@ from auth.manager import (
     save_system_settings,
     update_profile,
 )
-from engine.processor import process_pdf
+from engine.processor import process_document
 from engine.retriever import build_hybrid_retriever
 from engine.llm_chain import (
     build_chat_chain,
@@ -231,6 +232,7 @@ def initialize_state() -> None:
         "quiz_active": False,
         "quiz_context": "",
         "process_trace": None,
+        "chat_thinking_trace": None,
         "uploader_nonce": 0,
     }
     for key, val in defaults.items():
@@ -260,6 +262,7 @@ def _reset_runtime_state(keep_room: bool = True) -> None:
     st.session_state.quiz_context = ""
     st.session_state.processed = False
     st.session_state.process_trace = None
+    st.session_state.chat_thinking_trace = None
     if not keep_room:
         st.session_state.current_room_id = None
 
@@ -282,7 +285,7 @@ def load_study_room(room_id: int) -> tuple[bool, str]:
         file_path = rf["file_path"]
         if not os.path.exists(file_path):
             continue
-        chunks = process_pdf(
+        chunks = process_document(
             file_path,
             chunk_size=int(room["chunk_size"]),
             chunk_overlap=int(room["chunk_overlap"]),
@@ -340,7 +343,7 @@ def render_room_timeline() -> None:
     rooms = list_user_study_rooms(user_id)
 
     if not rooms:
-        st.sidebar.caption("No chats yet. Upload a PDF to create one.")
+        st.sidebar.caption("No chats yet. Upload a document to create one.")
         return
 
     current_room_id = st.session_state.get("current_room_id")
@@ -714,7 +717,7 @@ def process_documents(
     file_records: list[dict] = []
     for uf in uploaded_files:
         file_path = save_uploaded_file(uf, UPLOAD_DIR)
-        chunks = process_pdf(file_path, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
+        chunks = process_document(file_path, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
         all_chunks.extend(chunks)
         per_file_stats.append(
             {
@@ -803,7 +806,7 @@ def chat_tab(model_name: str, temperature: float) -> None:
     ready = bool(st.session_state.processed)
 
     if not ready:
-        st.info("Upload and process a PDF to start chatting.")
+        st.info("Upload and process documents to start chatting.")
 
     bubble_group = st.container(border=True)
     with bubble_group:
@@ -814,9 +817,27 @@ def chat_tab(model_name: str, temperature: float) -> None:
             if st.button("Clear Chat History", key="clear_chat_history"):
                 clear_user_history(user_id, mode="chat", room_id=room_id)
                 st.session_state.chat_history = []
+                st.session_state.chat_thinking_trace = None
                 st.rerun()
         else:
             st.caption("No messages yet.")
+
+    thinking_trace = st.session_state.get("chat_thinking_trace")
+    if isinstance(thinking_trace, dict):
+        with st.expander("Thinking Steps (Last Response)", expanded=False):
+            st.write(f"- Question: `{thinking_trace.get('question', '')}`")
+            st.write(f"- Retrieved chunks: `{thinking_trace.get('retrieved_chunks', 0)}`")
+            st.write(f"- BM25 n-gram tokens: `{thinking_trace.get('bm25_ngram_count', 0)}`")
+            bm25_sample = thinking_trace.get("bm25_ngram_sample", "")
+            if bm25_sample:
+                st.caption("n-gram sample: " + bm25_sample)
+            st.write(f"- Context length: `{thinking_trace.get('context_chars', 0)}` chars")
+            st.write(f"- LLM model: `{thinking_trace.get('model_name', '')}`")
+            st.write(f"- Retrieval step: `{thinking_trace.get('retrieve_sec', 0.0):.2f}s`")
+            st.write(f"- n-gram step: `{thinking_trace.get('ngram_sec', 0.0):.2f}s`")
+            st.write(f"- Context build step: `{thinking_trace.get('context_sec', 0.0):.2f}s`")
+            st.write(f"- Generation step: `{thinking_trace.get('generation_sec', 0.0):.2f}s`")
+            st.write(f"- Total: `{thinking_trace.get('total_sec', 0.0):.2f}s`")
 
     question = st.chat_input("Ask anything about the document…", disabled=not ready)
     if question and ready:
@@ -834,40 +855,94 @@ def chat_tab(model_name: str, temperature: float) -> None:
 
         with bubble_group:
             display_chat_message("user", question)
+            live_thinking_area = st.container()
         st.session_state.chat_history.append({"role": "user", "content": question})
         save_message(user_id, "chat", "user", question, room_id=room_id)
 
-        with st.spinner("Thinking…"):
-            docs = st.session_state.retriever.invoke(question)
-            context = "\n\n---\n\n".join(d.page_content for d in docs)
+        start_total = time.perf_counter()
+        with live_thinking_area:
+            with st.status("Thinking Steps", expanded=True) as status:
+                status.write("1) Retrieving relevant chunks…")
+                start_step = time.perf_counter()
+                docs = st.session_state.retriever.invoke(question)
+                retrieve_sec = time.perf_counter() - start_step
+                status.write(f"✓ Retrieved {len(docs)} chunk(s) in {retrieve_sec:.2f}s")
 
-            debug_info = getattr(st.session_state.retriever, "last_debug_info", None)
-            if isinstance(debug_info, dict):
-                print(
-                    "[DeepDoc - AI-Powered Document Intelligence][Retrieval] Trace:",
-                    {
-                        "user_id": user_id,
-                        "username": username,
-                        "original_query": debug_info.get("original_query"),
-                        "normalized_query": debug_info.get("normalized_query"),
-                        "bm25_count": debug_info.get("bm25_count"),
-                        "vector_count": debug_info.get("vector_count"),
-                        "fused_count": debug_info.get("fused_count"),
-                        "bm25_weight": debug_info.get("bm25_weight"),
-                        "vector_weight": debug_info.get("vector_weight"),
-                    },
+                status.write("2) Preparing BM25 n-gram query tokens…")
+                start_step = time.perf_counter()
+                debug_info = getattr(st.session_state.retriever, "last_debug_info", None)
+                bm25_tokens = []
+                bm25_sample = ""
+                if isinstance(debug_info, dict):
+                    raw_tokens = debug_info.get("bm25_query_tokens", [])
+                    if isinstance(raw_tokens, list):
+                        bm25_tokens = raw_tokens
+                        bm25_sample = ", ".join(str(tok) for tok in bm25_tokens[:20])
+                ngram_sec = time.perf_counter() - start_step
+                status.write(f"✓ BM25 n-gram tokens: {len(bm25_tokens)} in {ngram_sec:.2f}s")
+                if bm25_sample:
+                    status.caption("Sample: " + bm25_sample)
+
+                status.write("3) Building context from retrieved chunks…")
+                start_step = time.perf_counter()
+                context = "\n\n---\n\n".join(d.page_content for d in docs)
+                context_sec = time.perf_counter() - start_step
+                status.write(f"✓ Context prepared ({len(context)} chars) in {context_sec:.2f}s")
+
+                if isinstance(debug_info, dict):
+                    print(
+                        "[DeepDoc - AI-Powered Document Intelligence][Retrieval] Trace:",
+                        {
+                            "user_id": user_id,
+                            "username": username,
+                            "original_query": debug_info.get("original_query"),
+                            "normalized_query": debug_info.get("normalized_query"),
+                            "bm25_count": debug_info.get("bm25_count"),
+                            "vector_count": debug_info.get("vector_count"),
+                            "fused_count": debug_info.get("fused_count"),
+                            "bm25_weight": debug_info.get("bm25_weight"),
+                            "vector_weight": debug_info.get("vector_weight"),
+                        },
+                    )
+
+                status.write(f"4) Generating final answer with `{model_name}`…")
+                start_step = time.perf_counter()
+                chain = build_chat_chain_with_context(
+                    model=model_name,
+                    temperature=temperature,
+                    base_url=OLLAMA_BASE_URL,
                 )
+                answer = chain.invoke({"context": context, "question": question})
+                generation_sec = time.perf_counter() - start_step
+                status.write(f"✓ Answer generated in {generation_sec:.2f}s")
+                status.update(label="Thinking complete", state="complete", expanded=False)
 
-            chain = build_chat_chain_with_context(
-                model=model_name,
-                temperature=temperature,
-                base_url=OLLAMA_BASE_URL,
-            )
-            answer = chain.invoke({"context": context, "question": question})
+        total_sec = time.perf_counter() - start_total
+        st.session_state.chat_thinking_trace = {
+            "question": question,
+            "retrieved_chunks": len(docs),
+            "bm25_ngram_count": len(bm25_tokens),
+            "bm25_ngram_sample": bm25_sample,
+            "context_chars": len(context),
+            "model_name": model_name,
+            "retrieve_sec": retrieve_sec,
+            "ngram_sec": ngram_sec,
+            "context_sec": context_sec,
+            "generation_sec": generation_sec,
+            "total_sec": total_sec,
+        }
 
         debug_info = getattr(st.session_state.retriever, "last_debug_info", None)
         with st.expander("BM25 + Vector Trace", expanded=False):
             if isinstance(debug_info, dict):
+                header_tokens = debug_info.get("bm25_query_tokens", [])
+                if isinstance(header_tokens, list):
+                    st.write(f"- BM25 n-gram tokens: `{len(header_tokens)}`")
+                    if header_tokens:
+                        st.caption(
+                            "n-gram sample: " + ", ".join(str(tok) for tok in header_tokens[:20])
+                        )
+
                 st.markdown("**Step 1 · Query**")
                 st.write(f"- Original: `{debug_info.get('original_query', '')}`")
                 st.write(f"- Normalized: `{debug_info.get('normalized_query', '')}`")
@@ -936,7 +1011,7 @@ def quiz_tab(model_name: str, temperature: float) -> None:
     room_id = st.session_state.get("current_room_id")
 
     if not st.session_state.processed:
-        st.info("Upload and process a PDF to start a quiz.")
+        st.info("Upload and process documents to start a quiz.")
         return
 
     if not st.session_state.quiz_active:
@@ -1072,7 +1147,7 @@ def main() -> None:
         unsafe_allow_html=True,
     )
     st.caption(
-        "Chat with your PDFs · Study with AI-generated quizzes · "
+        "Chat with your documents · Study with AI-generated quizzes · "
         "Powered by Ollama + BM25 + Vector Search"
     )
 
@@ -1090,7 +1165,7 @@ def main() -> None:
     chunk_size = settings["chunk_size"]
 
     with st.expander(
-        "Upload & Process PDF",
+        "Upload & Process Documents",
         expanded=True,
     ):
         col_upload, col_settings = st.columns([2, 1])
@@ -1100,8 +1175,8 @@ def main() -> None:
 
         with col_upload:
             uploaded_files = st.file_uploader(
-                "Upload one or more PDF files",
-                type=["pdf"],
+                "Upload one or more files (PDF, DOCX, TXT)",
+                type=["pdf", "docx", "txt"],
                 accept_multiple_files=True,
                 key=f"upload_files_{st.session_state.uploader_nonce}",
             )
@@ -1111,7 +1186,7 @@ def main() -> None:
                 #     st.write(f"• {uf.name}")
 
                 if st.button("Process Documents", type="primary", use_container_width=True):
-                    with st.spinner("Loading PDFs → Chunking → Building BM25 + Vector index…"):
+                    with st.spinner("Loading documents → Chunking → Building BM25 + Vector index…"):
                         process_documents(
                             uploaded_files,
                             chunk_size,
