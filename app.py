@@ -43,7 +43,7 @@ from engine.llm_chain import (
     build_quiz_chain,
     build_eval_chain,
 )
-from utils.helpers import save_uploaded_file, display_chat_message, parse_quiz_questions
+from utils.helpers import save_uploaded_file, display_chat_message, parse_quiz_questions, get_pdf_preview
 
 load_dotenv()
 
@@ -447,13 +447,22 @@ def render_sidebar() -> None:
         ),
         unsafe_allow_html=True,
     )
-    # st.sidebar.markdown(f"User: **{user['username']}** `{user['role']}`")
 
-    if st.sidebar.button("New Chat", use_container_width=True):
-        _reset_runtime_state(keep_room=False)
-        st.session_state.uploader_nonce += 1
-        st.session_state.active_page = "chat"
-        st.rerun()
+    col1, col2 = st.sidebar.columns([1, 1])
+    with col1:
+        if st.button("➕ New Chat", use_container_width=True, help="Ctrl+K"):
+            _reset_runtime_state(keep_room=False)
+            st.session_state.uploader_nonce += 1
+            st.session_state.active_page = "chat"
+            st.rerun()
+    with col2:
+        if st.button("🗑️ Clear Data", use_container_width=True, type="secondary", help="Clear all user data"):
+            user_id = st.session_state.user["id"]
+            clear_user_history(user_id, mode="chat")
+            clear_user_history(user_id, mode="quiz")
+            _reset_runtime_state(keep_room=False)
+            st.sidebar.success("All data cleared!")
+            st.rerun()
 
     st.sidebar.markdown("### Chats")
     render_room_timeline()
@@ -712,7 +721,10 @@ def process_documents(
     all_chunks = []
     per_file_stats: list[dict] = []
     file_records: list[dict] = []
-    for uf in uploaded_files:
+    
+    progress_bar = st.progress(0, text="Processing files...")
+    for idx, uf in enumerate(uploaded_files):
+        progress_bar.progress((idx + 1) / len(uploaded_files), text=f"Processing {uf.name}...")
         file_path = save_uploaded_file(uf, UPLOAD_DIR)
         chunks = process_pdf(file_path, chunk_size=chunk_size, chunk_overlap=chunk_overlap)
         all_chunks.extend(chunks)
@@ -724,6 +736,7 @@ def process_documents(
             }
         )
         file_records.append({"file_name": uf.name, "file_path": file_path})
+    progress_bar.empty()
 
     room_title = (
         uploaded_files[0].name if len(uploaded_files) == 1
@@ -817,8 +830,26 @@ def chat_tab(model_name: str, temperature: float) -> None:
                 st.rerun()
         else:
             st.caption("No messages yet.")
+            if ready:
+                st.markdown("** Try asking:**")
+                suggestions = [
+                    "What is the main topic of this document?",
+                    "Summarize the key points",
+                    "What are the important concepts?"
+                ]
+                cols = st.columns(3)
+                for idx, suggestion in enumerate(suggestions):
+                    with cols[idx]:
+                        if st.button(suggestion, key=f"suggest_{idx}", use_container_width=True):
+                            st.session_state["suggested_query"] = suggestion
+                            st.rerun()
 
-    question = st.chat_input("Ask anything about the document…", disabled=not ready)
+    question = st.chat_input("Ask anything about the document… (Ctrl+Enter to send)", disabled=not ready)
+    
+    # Handle suggested query
+    if "suggested_query" in st.session_state:
+        question = st.session_state.pop("suggested_query")
+    
     if question and ready:
         print(
             "[DeepDoc - AI-Powered Document Intelligence][Chat] User question:",
@@ -1107,8 +1138,16 @@ def main() -> None:
             )
 
             if uploaded_files:
-                # for uf in uploaded_files:
-                #     st.write(f"• {uf.name}")
+                st.markdown(f"**{len(uploaded_files)} file(s) selected**")
+                for uf in uploaded_files:
+                    with st.expander(f"📄 {uf.name}", expanded=False):
+                        temp_path = save_uploaded_file(uf, UPLOAD_DIR)
+                        preview = get_pdf_preview(temp_path)
+                        if preview["success"]:
+                            st.caption(f"Pages: {preview['pages']}")
+                            st.text_area("Preview", preview["preview"], height=150, disabled=True)
+                        else:
+                            st.warning(f"Could not preview: {preview.get('error', 'Unknown error')}")
 
                 if st.button("Process Documents", type="primary", use_container_width=True):
                     with st.spinner("Loading PDFs → Chunking → Building BM25 + Vector index…"):
@@ -1132,9 +1171,12 @@ def main() -> None:
                     st.write(f"{i}. {file_name}")
 
                 st.markdown("**Step 2 · Chunking**")
+                total_chunks = process_trace.get('total_chunks', 0)
+                st.write(f"- Total chunks: `{total_chunks}`")
                 for item in process_trace.get("per_file_stats", []):
-                    st.write(f"- {item.get('file_name')}: `{item.get('chunk_count')}` chunks")
-                st.write(f"- Total chunks: `{process_trace.get('total_chunks', 0)}`")
+                    chunk_count = item.get('chunk_count')
+                    percentage = (chunk_count / total_chunks * 100) if total_chunks > 0 else 0
+                    st.write(f"- {item.get('file_name')}: `{chunk_count}` chunks ({percentage:.1f}%)")
 
                 st.markdown("**Step 3 · Index Build (Hybrid Retrieval)**")
                 st.write(f"- Top K: `{process_trace.get('top_k', 0)}`")

@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 
 import streamlit as st
+from pypdf import PdfReader
 
 
 def save_uploaded_file(uploaded_file, upload_dir: str = "data/uploads") -> str:
@@ -14,6 +15,23 @@ def save_uploaded_file(uploaded_file, upload_dir: str = "data/uploads") -> str:
     with open(file_path, "wb") as f:
         f.write(uploaded_file.getbuffer())
     return file_path
+
+
+def get_pdf_preview(file_path: str, max_pages: int = 2) -> dict:
+    """Extract preview info from PDF."""
+    try:
+        reader = PdfReader(file_path)
+        total_pages = len(reader.pages)
+        preview_text = ""
+        for i in range(min(max_pages, total_pages)):
+            preview_text += reader.pages[i].extract_text() or ""
+        return {
+            "pages": total_pages,
+            "preview": preview_text[:500],
+            "success": True
+        }
+    except Exception as e:
+        return {"pages": 0, "preview": "", "success": False, "error": str(e)}
 
 
 def display_chat_message(role: str, content: str) -> None:
