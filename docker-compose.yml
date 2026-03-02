@@ -11,18 +11,20 @@ services:
       - ./ollama_data:/root/.ollama
     restart: always
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:11434/api/tags"]
+      test: ["CMD", "ollama", "list"]
       interval: 10s
       timeout: 5s
       retries: 12
 
   deepdoc_app:
+    image: deepdoc_app:latest
     build: .
     container_name: deepdoc_ui
     ports:
       - "8501:8501"
+    env_file:
+      - .env
     environment:
-      - OLLAMA_BASE_URL=http://ollama:11434
       - STREAMLIT_SERVER_FILE_WATCHER_TYPE=none
       - STREAMLIT_SERVER_RUN_ON_SAVE=false
       - STREAMLIT_BROWSER_GATHER_USAGE_STATS=false
