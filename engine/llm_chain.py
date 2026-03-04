@@ -65,18 +65,28 @@ def build_chat_chain_with_context(model: str, temperature: float, base_url: str)
 _QUIZ_PROMPT = ChatPromptTemplate.from_template(
     """You are an expert teacher creating study questions for students.
 Based on the document excerpt below, generate exactly {num_questions} \
-clear, educational questions.
+clear, educational questions in {quiz_type} format.
 
 Rules:
 - Cover the most important concepts in the text.
 - Use a mix of factual, conceptual, and analytical questions.
 - Number each question as Q1:, Q2:, Q3: etc.
 - Do NOT include answers.
+- If quiz_type is "Multiple Choose":
+    - Each question must include exactly 4 options as:
+        A) ...
+        B) ...
+        C) ...
+        D) ...
+    - Put options directly under each Qn line.
+- If quiz_type is "True/False":
+    - Each question should be a single statement that can be judged True or False.
+    - Do not add A/B/C/D options.
 
 Document excerpt:
 {context}
 
-Generate {num_questions} questions:"""
+Generate {num_questions} questions in {quiz_type} format:"""
 )
 
 

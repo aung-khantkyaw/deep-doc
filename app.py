@@ -231,6 +231,8 @@ def initialize_state() -> None:
         "quiz_idx": 0,
         "quiz_active": False,
         "quiz_context": "",
+        "quiz_feedback_by_idx": {},
+        "quiz_type": "Multiple Choose",
         "process_trace": None,
         "chat_thinking_trace": None,
         "uploader_nonce": 0,
@@ -260,6 +262,8 @@ def _reset_runtime_state(keep_room: bool = True) -> None:
     st.session_state.quiz_idx = 0
     st.session_state.quiz_active = False
     st.session_state.quiz_context = ""
+    st.session_state.quiz_feedback_by_idx = {}
+    st.session_state.quiz_type = "Multiple Choose"
     st.session_state.processed = False
     st.session_state.process_trace = None
     st.session_state.chat_thinking_trace = None
@@ -758,6 +762,7 @@ def process_documents(
     st.session_state.quiz_questions = []
     st.session_state.quiz_active = False
     st.session_state.quiz_idx = 0
+    st.session_state.quiz_feedback_by_idx = {}
     st.session_state.process_trace = {
         "uploaded_files": [uf.name for uf in uploaded_files],
         "per_file_stats": per_file_stats,
@@ -1016,48 +1021,81 @@ def quiz_tab(model_name: str, temperature: float) -> None:
 
     if not st.session_state.quiz_active:
         st.markdown("Generate study questions from the document, then answer them one by one.")
-        col1, col2 = st.columns([3, 1])
+        col1, col2, col3 = st.columns([2, 2, 1])
         with col1:
-            num_q = st.number_input("Number of questions", min_value=1, max_value=10, value=3)
+            quiz_type = st.selectbox(
+                "Quiz Type",
+                ["Multiple Choose", "True/False"],
+                index=0 if st.session_state.get("quiz_type", "Multiple Choose") == "Multiple Choose" else 1,
+            )
+            st.session_state.quiz_type = quiz_type
         with col2:
+            num_q = st.number_input("Number of questions", min_value=1, max_value=10, value=3)
+        with col3:
             st.write("")
             st.write("")
             gen = st.button("Generate", use_container_width=True, type="primary")
 
         if gen:
-            with st.spinner("Generating questions from document…"):
-                docs = st.session_state.retriever.invoke(
-                    "key concepts main ideas important facts"
-                )
-                context = "\n\n---\n\n".join(d.page_content for d in docs)
-                st.session_state.quiz_context = context
+            parse_warning = "Could not parse questions. Try a different model or chunk size."
+            try:
+                with st.spinner("Generating questions from document…"):
+                    docs = st.session_state.retriever.invoke(
+                        "key concepts main ideas important facts"
+                    )
+                    context = "\n\n---\n\n".join(d.page_content for d in docs)
+                    st.session_state.quiz_context = context
 
-                chain = build_quiz_chain(model_name, temperature, OLLAMA_BASE_URL)
-                raw = chain.invoke({"context": context, "num_questions": num_q})
-                questions = parse_quiz_questions(raw)
+                    chain = build_quiz_chain(model_name, temperature, OLLAMA_BASE_URL)
+                    raw = chain.invoke(
+                        {
+                            "context": context,
+                            "num_questions": num_q,
+                            "quiz_type": quiz_type,
+                        }
+                    )
+                    questions = parse_quiz_questions(raw, quiz_type=quiz_type)
+            except Exception as exc:
+                print(
+                    "[DeepDoc - AI-Powered Document Intelligence][Quiz] Failed to generate/parse questions:",
+                    str(exc),
+                )
+                questions = []
 
             if not questions:
-                st.warning("Could not parse questions. Try a different model or chunk size.")
+                st.warning(parse_warning)
                 return
 
             st.session_state.quiz_questions = questions
             st.session_state.quiz_idx = 0
             st.session_state.quiz_active = True
+            st.session_state.quiz_feedback_by_idx = {}
             st.rerun()
     else:
         questions = st.session_state.quiz_questions
         idx   = st.session_state.quiz_idx
         total = len(questions)
+        feedback_by_idx = st.session_state.get("quiz_feedback_by_idx", {})
+        current_question = questions[idx]
+        question_text = str(current_question.get("question", ""))
+        question_options = current_question.get("options", [])
 
         st.progress(idx / total, text=f"Question {idx + 1} of {total}")
-        st.markdown(f"### {questions[idx]}")
+        st.markdown(f"### {question_text}")
 
-        student_answer = st.text_area(
-            "Your Answer",
-            key=f"answer_{idx}",
-            placeholder="Type your answer here…",
-            height=120,
-        )
+        if isinstance(question_options, list) and question_options:
+            student_answer = st.radio(
+                "Your Answer",
+                options=[str(opt) for opt in question_options],
+                key=f"answer_choice_{idx}",
+            )
+        else:
+            student_answer = st.text_area(
+                "Your Answer",
+                key=f"answer_{idx}",
+                placeholder="Type your answer here…",
+                height=120,
+            )
 
         col_submit, col_skip, col_quit = st.columns([2, 1, 1])
         with col_submit:
@@ -1069,6 +1107,7 @@ def quiz_tab(model_name: str, temperature: float) -> None:
 
         if quit_quiz:
             st.session_state.quiz_active = False
+            st.session_state.quiz_feedback_by_idx = {}
             st.rerun()
 
         if skip:
@@ -1079,39 +1118,46 @@ def quiz_tab(model_name: str, temperature: float) -> None:
                 st.success("You have reached the end of the quiz!")
                 if st.button("Start New Quiz"):
                     st.session_state.quiz_active = False
+                    st.session_state.quiz_feedback_by_idx = {}
                     st.rerun()
 
         if submit:
-            if not student_answer.strip():
+            if not str(student_answer).strip():
                 st.warning("Please write an answer before submitting.")
             else:
                 with st.spinner("Evaluating your answer…"):
                     eval_chain = build_eval_chain(model_name, OLLAMA_BASE_URL)
                     feedback = eval_chain.invoke({
-                        "question": questions[idx],
+                        "question": question_text,
                         "student_answer": student_answer,
                         "context": st.session_state.quiz_context,
                     })
 
-                save_message(user_id, "quiz", "user", questions[idx], room_id=room_id)
+                save_message(user_id, "quiz", "user", f"Q: {question_text}\nA: {student_answer}", room_id=room_id)
                 save_message(user_id, "quiz", "assistant", feedback, room_id=room_id)
                 if room_id is not None:
                     touch_study_room(room_id)
 
-                st.markdown("---")
-                st.markdown("#### Feedback")
-                st.markdown(feedback)
-                st.markdown("---")
+                feedback_by_idx[idx] = feedback
+                st.session_state.quiz_feedback_by_idx = feedback_by_idx
 
-                if idx + 1 < total:
-                    if st.button("Next Question →", type="primary"):
-                        st.session_state.quiz_idx += 1
-                        st.rerun()
-                else:
-                    st.success("You have completed all questions!")
-                    if st.button("Start New Quiz"):
-                        st.session_state.quiz_active = False
-                        st.rerun()
+        feedback = feedback_by_idx.get(idx)
+        if feedback:
+            st.markdown("---")
+            st.markdown("#### Feedback")
+            st.markdown(feedback)
+            st.markdown("---")
+
+            if idx + 1 < total:
+                if st.button("Next Question →", type="primary", key=f"next_question_{idx}"):
+                    st.session_state.quiz_idx += 1
+                    st.rerun()
+            else:
+                st.success("You have completed all questions!")
+                if st.button("Start New Quiz"):
+                    st.session_state.quiz_active = False
+                    st.session_state.quiz_feedback_by_idx = {}
+                    st.rerun()
 
 
 # ---------------------------------------------------------------------------
