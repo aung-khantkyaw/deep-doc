@@ -7,7 +7,10 @@ Roles:
 from __future__ import annotations
 
 import gc
+import ast
+import json
 import os
+import re
 import shutil
 import time
 from uuid import uuid4
@@ -232,7 +235,7 @@ def initialize_state() -> None:
         "quiz_active": False,
         "quiz_context": "",
         "quiz_feedback_by_idx": {},
-        "quiz_type": "Multiple Choose",
+        "quiz_type": "Multiple Choice",
         "process_trace": None,
         "chat_thinking_trace": None,
         "uploader_nonce": 0,
@@ -263,7 +266,7 @@ def _reset_runtime_state(keep_room: bool = True) -> None:
     st.session_state.quiz_active = False
     st.session_state.quiz_context = ""
     st.session_state.quiz_feedback_by_idx = {}
-    st.session_state.quiz_type = "Multiple Choose"
+    st.session_state.quiz_type = "Multiple Choice"
     st.session_state.processed = False
     st.session_state.process_trace = None
     st.session_state.chat_thinking_trace = None
@@ -1023,10 +1026,17 @@ def quiz_tab(model_name: str, temperature: float) -> None:
         st.markdown("Generate study questions from the document, then answer them one by one.")
         col1, col2, col3 = st.columns([2, 2, 1])
         with col1:
+            quiz_type_options = ["Multiple Choice", "True/False"]
+            current_quiz_type = st.session_state.get("quiz_type", "Multiple Choice")
+            current_idx = (
+                quiz_type_options.index(current_quiz_type)
+                if current_quiz_type in quiz_type_options
+                else 0
+            )
             quiz_type = st.selectbox(
                 "Quiz Type",
-                ["Multiple Choose", "True/False"],
-                index=0 if st.session_state.get("quiz_type", "Multiple Choose") == "Multiple Choose" else 1,
+                quiz_type_options,
+                index=current_idx,
             )
             st.session_state.quiz_type = quiz_type
         with col2:
@@ -1127,14 +1137,102 @@ def quiz_tab(model_name: str, temperature: float) -> None:
             else:
                 with st.spinner("Evaluating your answer…"):
                     eval_chain = build_eval_chain(model_name, OLLAMA_BASE_URL)
-                    feedback = eval_chain.invoke({
+                    feedback_raw = eval_chain.invoke({
                         "question": question_text,
                         "student_answer": student_answer,
+                        "quiz_type": st.session_state.get("quiz_type", "Multiple Choice"),
                         "context": st.session_state.quiz_context,
                     })
 
+                feedback = {
+                    "verdict": "",
+                    "what_was_right": "",
+                    "what_missing_or_wrong": "",
+                    "complete_answer": "",
+                    "additional_feedback": "",
+                }
+
+                def _normalize_key(raw_key: str) -> str:
+                    return re.sub(r"[^a-z0-9]", "", str(raw_key).lower())
+
+                def _apply_dict_payload(payload: dict) -> None:
+                    key_map = {
+                        "verdict": "verdict",
+                        "whatwasright": "what_was_right",
+                        "whatwasmissingorwrong": "what_missing_or_wrong",
+                        "completeanswer": "complete_answer",
+                        "additionalfeedback": "additional_feedback",
+                    }
+                    for k, v in payload.items():
+                        canonical = key_map.get(_normalize_key(k))
+                        if canonical:
+                            feedback[canonical] = str(v or "").strip()
+
+                text_for_parse = str(feedback_raw).strip()
+                parse_succeeded = False
+
+                candidates = [text_for_parse]
+                fenced = re.search(r"```(?:json)?\s*(.*?)\s*```", text_for_parse, re.IGNORECASE | re.DOTALL)
+                if fenced:
+                    candidates.insert(0, fenced.group(1).strip())
+
+                for candidate in candidates:
+                    json_block = re.search(r"\{[\s\S]*\}", candidate)
+                    snippets = [candidate]
+                    if json_block:
+                        snippets.insert(0, json_block.group(0).strip())
+
+                    for snippet in snippets:
+                        try:
+                            parsed_json = json.loads(snippet)
+                            if isinstance(parsed_json, dict):
+                                _apply_dict_payload(parsed_json)
+                                parse_succeeded = True
+                                break
+                        except Exception:
+                            pass
+
+                        try:
+                            parsed_py = ast.literal_eval(snippet)
+                            if isinstance(parsed_py, dict):
+                                _apply_dict_payload(parsed_py)
+                                parse_succeeded = True
+                                break
+                        except Exception:
+                            pass
+                    if parse_succeeded:
+                        break
+
+                if not parse_succeeded:
+                    section_patterns = {
+                        "verdict": r"(?is)(?:\*\*)?\s*Verdict(?:\s*\*\*)?\s*[:\-]\s*(.+?)(?=\n(?:\*\*)?\s*(?:What\s*was\s*right|What\s*was\s*missing\s*or\s*wrong|Complete\s*answer|Additional\s*feedback)\b|\Z)",
+                        "what_was_right": r"(?is)(?:\*\*)?\s*What\s*was\s*right(?:\s*\*\*)?\s*[:\-]\s*(.+?)(?=\n(?:\*\*)?\s*(?:What\s*was\s*missing\s*or\s*wrong|Complete\s*answer|Additional\s*feedback)\b|\Z)",
+                        "what_missing_or_wrong": r"(?is)(?:\*\*)?\s*What\s*was\s*missing\s*or\s*wrong(?:\s*\*\*)?\s*[:\-]\s*(.+?)(?=\n(?:\*\*)?\s*(?:Complete\s*answer|Additional\s*feedback)\b|\Z)",
+                        "complete_answer": r"(?is)(?:\*\*)?\s*Complete\s*answer(?:\s*\*\*)?\s*[:\-]\s*(.+?)(?=\n(?:\*\*)?\s*Additional\s*feedback\b|\Z)",
+                        "additional_feedback": r"(?is)(?:\*\*)?\s*Additional\s*feedback(?:\s*\*\*)?\s*[:\-]\s*(.+)$",
+                    }
+                    for key, pattern in section_patterns.items():
+                        match = re.search(pattern, text_for_parse)
+                        if match:
+                            feedback[key] = match.group(1).strip()
+
+                verdict_lc = feedback["verdict"].lower()
+                if not feedback["verdict"]:
+                    if "partially correct" in text_for_parse.lower():
+                        feedback["verdict"] = "Partially Correct"
+                    elif "incorrect" in text_for_parse.lower():
+                        feedback["verdict"] = "Incorrect"
+                    elif "correct" in text_for_parse.lower():
+                        feedback["verdict"] = "Correct"
+
+                if not feedback["additional_feedback"]:
+                    if any(feedback.values()):
+                        feedback["additional_feedback"] = "Keep going. Review the context and refine your answer."
+                    else:
+                        feedback["additional_feedback"] = "Good effort. Keep practicing with the document context."
+
                 save_message(user_id, "quiz", "user", f"Q: {question_text}\nA: {student_answer}", room_id=room_id)
-                save_message(user_id, "quiz", "assistant", feedback, room_id=room_id)
+                save_message(user_id, "quiz", "assistant", json.dumps(feedback, ensure_ascii=True), room_id=room_id)
                 if room_id is not None:
                     touch_study_room(room_id)
 
@@ -1145,7 +1243,42 @@ def quiz_tab(model_name: str, temperature: float) -> None:
         if feedback:
             st.markdown("---")
             st.markdown("#### Feedback")
-            st.markdown(feedback)
+            if isinstance(feedback, str):
+                st.markdown(feedback)
+            else:
+                quiz_type = st.session_state.get("quiz_type", "Multiple Choice")
+                verdict = str(feedback.get("verdict", "")).strip() if isinstance(feedback, dict) else ""
+                is_correct = verdict.lower().startswith("correct")
+
+                def _visible_feedback_value(key: str) -> str:
+                    raw_val = str(feedback.get(key, "")).strip() if isinstance(feedback, dict) else ""
+                    return "" if not raw_val or raw_val.upper() == "N/A" else raw_val
+
+                st.markdown(f"- **Verdict**: {verdict or 'N/A'}")
+
+                if quiz_type == "True/False":
+                    what_right = _visible_feedback_value("what_was_right")
+                    what_missing = _visible_feedback_value("what_missing_or_wrong")
+                    if what_right:
+                        st.markdown(f"- **What was right**: {what_right}")
+                    if what_missing:
+                        st.markdown(f"- **What was missing or wrong**: {what_missing}")
+                    st.markdown(
+                        "- **Additional feedback**: "
+                        + (str(feedback.get("additional_feedback", "")).strip() or "N/A")
+                    )
+                elif quiz_type == "Multiple Choice":
+                    what_right = _visible_feedback_value("what_was_right")
+                    if what_right:
+                        st.markdown(f"- **What was right**: {what_right}")
+                    if not is_correct:
+                        what_missing = _visible_feedback_value("what_missing_or_wrong")
+                        if what_missing:
+                            st.markdown(f"- **What was missing or wrong**: {what_missing}")
+                    st.markdown(
+                        "- **Additional feedback**: "
+                        + (str(feedback.get("additional_feedback", "")).strip() or "N/A")
+                    )
             st.markdown("---")
 
             if idx + 1 < total:
@@ -1241,6 +1374,8 @@ def main() -> None:
                             embedding_model,
                             temperature,
                         )
+                    # Reset uploader so selected file names and process button are hidden after success.
+                    st.session_state.uploader_nonce += 1
                     st.success(f"{len(uploaded_files)} file(s) indexed and ready!")
                     st.rerun()
 

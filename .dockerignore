@@ -5,3 +5,4 @@ __pycache__/
 ollama_data/
 data/chroma_db/
 .git/
+data/

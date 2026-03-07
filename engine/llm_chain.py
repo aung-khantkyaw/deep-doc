@@ -72,7 +72,7 @@ Rules:
 - Use a mix of factual, conceptual, and analytical questions.
 - Number each question as Q1:, Q2:, Q3: etc.
 - Do NOT include answers.
-- If quiz_type is "Multiple Choose":
+- If quiz_type is "Multiple Choice":
     - Each question must include exactly 4 options as:
         A) ...
         B) ...
@@ -107,16 +107,27 @@ Question: {question}
 
 Student's Answer: {student_answer}
 
+Quiz Type: {quiz_type}
+
 Reference material from the document:
 {context}
 
-Please provide structured feedback:
-1. **Verdict**: Correct / Partially Correct / Incorrect
-2. **What was right**: (what the student understood well)
-3. **What was missing or wrong**: (gaps or errors)
-4. **Complete answer**: (the ideal answer based on the document)
+Return ONLY valid JSON with this exact schema:
+{{
+    "verdict": "Correct|Partially Correct|Incorrect",
+    "what_was_right": "string",
+    "what_missing_or_wrong": "string",
+    "complete_answer": "string",
+    "additional_feedback": "string"
+}}
 
-Be encouraging, precise, and educational in your response."""
+Rules:
+- Always include all five keys.
+- For Multiple Choice and True/False:
+    - If verdict is Correct: keep "what_missing_or_wrong" and "complete_answer" as empty string.
+    - If verdict is Partially Correct or Incorrect: include "what_missing_or_wrong"; "complete_answer" can be empty.
+- Keep responses concise and grounded in the reference material.
+"""
 )
 
 

@@ -15,7 +15,7 @@ B) 4
 C) 5
 D) 6
 """
-    questions = parse_quiz_questions(raw, quiz_type="Multiple Choose")
+    questions = parse_quiz_questions(raw, quiz_type="Multiple Choice")
 
     assert len(questions) == 2
     assert questions[0]["question"] == "What is the capital of France?"
@@ -30,7 +30,7 @@ B. UI
 C. Docker
 D. Browser
 """
-    questions = parse_quiz_questions(raw, quiz_type="Multiple Choose")
+    questions = parse_quiz_questions(raw, quiz_type="Multiple Choice")
 
     assert len(questions) == 1
     assert questions[0]["question"] == "Which layer handles retrieval?"
@@ -65,8 +65,9 @@ def test_parse_questions_from_json_payload():
   ]
 }
 """
-    questions = parse_quiz_questions(raw, quiz_type="Multiple Choose")
+    questions = parse_quiz_questions(raw, quiz_type="Multiple Choice")
 
     assert len(questions) == 1
     assert questions[0]["question"] == "What does RAG stand for?"
     assert questions[0]["options"][0] == "Retrieval-Augmented Generation"
+

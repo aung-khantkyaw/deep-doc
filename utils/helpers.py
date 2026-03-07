@@ -24,7 +24,7 @@ def display_chat_message(role: str, content: str) -> None:
         st.markdown(content)
 
 
-def parse_quiz_questions(raw_text: str, quiz_type: str = "Multiple Choose") -> list[dict[str, object]]:
+def parse_quiz_questions(raw_text: str, quiz_type: str = "Multiple Choice") -> list[dict[str, object]]:
     """Extract structured quiz items from LLM output.
 
     Returns a list of dicts:
@@ -37,7 +37,7 @@ def parse_quiz_questions(raw_text: str, quiz_type: str = "Multiple Choose") -> l
     if not isinstance(raw_text, str):
         raw_text = str(raw_text)
 
-    normalized_type = "True/False" if quiz_type == "True/False" else "Multiple Choose"
+    normalized_type = "True/False" if quiz_type == "True/False" else "Multiple Choice"
 
     def _normalize_item(question: str, options: list[str] | None = None) -> dict[str, object]:
         cleaned_question = str(question).strip()
@@ -50,6 +50,43 @@ def parse_quiz_questions(raw_text: str, quiz_type: str = "Multiple Choose") -> l
             "options": normalized_options,
             "type": normalized_type,
         }
+
+    def _is_non_question_line(line: str) -> bool:
+        """Filter out common instruction/header lines from LLM output."""
+        cleaned = str(line).strip()
+        if not cleaned:
+            return True
+
+        lowered = cleaned.lower()
+        normalized = re.sub(r"[^a-z0-9\s]", "", lowered)
+        normalized = re.sub(r"\s+", " ", normalized).strip()
+
+        generic_headers = {
+            "question",
+            "questions",
+            "quiz",
+            "quiz questions",
+            "multiple choice",
+            "multiple choice questions",
+            "true false",
+            "true false questions",
+        }
+        if normalized in generic_headers:
+            return True
+
+        if re.match(
+            r"^here (is|are) (the )?questions? (in|for) (multiple choice|true false)( format)?$",
+            normalized,
+        ):
+            return True
+
+        if re.match(
+            r"^(sure|okay|ok|great) here (is|are) (the )?questions?( for you)?$",
+            normalized,
+        ):
+            return True
+
+        return False
 
     def _try_parse_json_questions(text: str) -> list[dict[str, object]]:
         cleaned = text.strip()
@@ -144,6 +181,8 @@ def parse_quiz_questions(raw_text: str, quiz_type: str = "Multiple Choose") -> l
 
     for line in lines:
         normalized_line = re.sub(r"^\s*[-*]\s+", "", line)
+        if _is_non_question_line(normalized_line):
+            continue
 
         q_match = (
             question_pattern_q.match(normalized_line)
@@ -181,6 +220,8 @@ def parse_quiz_questions(raw_text: str, quiz_type: str = "Multiple Choose") -> l
     if normalized_type == "True/False" and not questions and lines:
         for line in lines:
             normalized_line = re.sub(r"^\s*[-*]\s+", "", line)
+            if _is_non_question_line(normalized_line):
+                continue
             q_match = (
                 question_pattern_q.match(normalized_line)
                 or question_pattern_number.match(normalized_line)
