@@ -239,6 +239,11 @@ def initialize_state() -> None:
         "process_trace": None,
         "chat_thinking_trace": None,
         "uploader_nonce": 0,
+        # Runtime caches for faster repeated requests
+        "chat_chain_cache": None,
+        "quiz_chain_cache": None,
+        "eval_chain_cache": None,
+        "quiz_retrieval_cache": None,
     }
     for key, val in defaults.items():
         if key not in st.session_state:
@@ -270,6 +275,7 @@ def _reset_runtime_state(keep_room: bool = True) -> None:
     st.session_state.processed = False
     st.session_state.process_trace = None
     st.session_state.chat_thinking_trace = None
+    st.session_state.quiz_retrieval_cache = None
     if not keep_room:
         st.session_state.current_room_id = None
 
@@ -491,7 +497,6 @@ def render_upload_settings_panel() -> tuple[str, str, int, float, int]:
         f"LLM `{model_name}` · Embed `{embedding_model}` · TopK `{top_k}` · "
         f"Temperature `{temperature}` · Chunk `{chunk_size}`"
     )
-    st.caption("Read-only here. Admin can change these in Setting & Help.")
     return model_name, embedding_model, top_k, temperature, chunk_size
 
 
@@ -532,135 +537,130 @@ def render_settings_page() -> None:
                 st.error(msg)
 
     st.markdown("#### Performance Model Control")
-    if is_admin():
-        settings = get_system_settings()
-        fast_preset = {
-            "model_name": "llama3.2:3b",
-            "embedding_model": "all-MiniLM-L6-v2",
-            "top_k": 3,
-            "temperature": 0.2,
-            "chunk_size": 512,
-        }
-        quality_preset = {
-            "model_name": "llama3.1:8b",
-            "embedding_model": "nomic-embed-text",
-            "top_k": 5,
-            "temperature": 0.3,
-            "chunk_size": 768,
-        }
+    settings = get_system_settings()
+    fast_preset = {
+        "model_name": "llama3.2:3b",
+        "embedding_model": "all-MiniLM-L6-v2",
+        "top_k": 3,
+        "temperature": 0.2,
+        "chunk_size": 512,
+    }
+    balanced_preset = {
+        "model_name": "llama3.1:8b",
+        "embedding_model": "all-MiniLM-L6-v2",
+        "top_k": 3,
+        "temperature": 0.2,
+        "chunk_size": 512,
+    }
+    quality_preset = {
+        "model_name": "llama3.1:8b",
+        "embedding_model": "nomic-embed-text",
+        "top_k": 5,
+        "temperature": 0.3,
+        "chunk_size": 768,
+    }
 
-        if (
-            settings["model_name"] == fast_preset["model_name"]
-            and settings.get("embedding_model") == fast_preset["embedding_model"]
-            and settings["top_k"] == fast_preset["top_k"]
-            and settings["temperature"] == fast_preset["temperature"]
-            and settings["chunk_size"] == fast_preset["chunk_size"]
-        ):
-            default_mode = "Fast"
-        elif (
-            settings["model_name"] == quality_preset["model_name"]
-            and settings.get("embedding_model") == quality_preset["embedding_model"]
-            and settings["top_k"] == quality_preset["top_k"]
-            and settings["temperature"] == quality_preset["temperature"]
-            and settings["chunk_size"] == quality_preset["chunk_size"]
-        ):
-            default_mode = "Quality"
-        else:
-            default_mode = "Custom"
-
-        perf_key = "settings_performance_mode"
-        if perf_key not in st.session_state or st.session_state[perf_key] not in {"Fast", "Quality", "Custom"}:
-            st.session_state[perf_key] = default_mode
-
-        performance_mode = st.radio(
-            "Mode",
-            options=["Fast", "Quality", "Custom"],
-            key=perf_key,
-            horizontal=True,
-        )
-
-        chunk_overlap = settings["chunk_overlap"]
-        if performance_mode == "Fast":
-            st.caption(
-                f"LLM `{fast_preset['model_name']}` · Embed `{fast_preset['embedding_model']}` "
-            )
-            st.caption(
-                f"TopK `{fast_preset['top_k']}` · Temp `{fast_preset['temperature']}` · Chunk `{fast_preset['chunk_size']}`"
-            )
-            if st.button("Apply Fast", use_container_width=False):
-                save_system_settings(
-                    fast_preset["model_name"],
-                    fast_preset["embedding_model"],
-                    fast_preset["top_k"],
-                    fast_preset["temperature"],
-                    fast_preset["chunk_size"],
-                    chunk_overlap,
-                )
-                st.success("Fast profile applied")
-                st.rerun()
-            
-        elif performance_mode == "Quality":
-            st.caption(
-                f"LLM `{quality_preset['model_name']}` · Embed `{quality_preset['embedding_model']}` "
-            )
-            st.caption(
-                f"TopK `{quality_preset['top_k']}` · Temp `{quality_preset['temperature']}` · Chunk `{quality_preset['chunk_size']}`"
-            )
-            if st.button("Apply Quality", use_container_width=False):
-                save_system_settings(
-                    quality_preset["model_name"],
-                    quality_preset["embedding_model"],
-                    quality_preset["top_k"],
-                    quality_preset["temperature"],
-                    quality_preset["chunk_size"],
-                    chunk_overlap,
-                )
-                st.success("Quality profile applied")
-                st.rerun()
-            
-        else:
-            llm_model = st.selectbox(
-                "LLM Model",
-                options=MODEL_OPTIONS,
-                index=MODEL_OPTIONS.index(settings["model_name"]) if settings["model_name"] in MODEL_OPTIONS else 0,
-            )
-            embedding_model = st.selectbox(
-                "Embedding Model",
-                options=EMBEDDING_OPTIONS,
-                index=EMBEDDING_OPTIONS.index(settings.get("embedding_model", DEFAULT_EMBEDDING_MODEL))
-                if settings.get("embedding_model", DEFAULT_EMBEDDING_MODEL) in EMBEDDING_OPTIONS
-                else 0,
-            )
-            top_k = st.slider("Top K Chunks", 1, 10, settings["top_k"], key="settings_topk")
-            chunk_size = st.select_slider(
-                "Chunk Size (tokens)", [256, 512, 768, 1024], settings["chunk_size"], key="settings_chunk_size"
-            )
-            temperature = st.slider(
-                "Temperature", 0.0, 1.0, settings["temperature"], step=0.05, key="settings_temp"
-            )
-            if st.button("Save Custom", use_container_width=False):
-                save_system_settings(
-                    llm_model,
-                    embedding_model,
-                    top_k,
-                    temperature,
-                    chunk_size,
-                    chunk_overlap,
-                )
-                st.success("Custom settings saved")
-                st.rerun()
+    if (
+        settings["model_name"] == fast_preset["model_name"]
+        and settings.get("embedding_model") == fast_preset["embedding_model"]
+        and settings["top_k"] == fast_preset["top_k"]
+        and settings["temperature"] == fast_preset["temperature"]
+        and settings["chunk_size"] == fast_preset["chunk_size"]
+    ):
+        default_mode = "Fast"
+    elif (
+        settings["model_name"] == balanced_preset["model_name"]
+        and settings.get("embedding_model") == balanced_preset["embedding_model"]
+        and settings["top_k"] == balanced_preset["top_k"]
+        and settings["temperature"] == balanced_preset["temperature"]
+        and settings["chunk_size"] == balanced_preset["chunk_size"]
+    ):
+        default_mode = "Balanced"
+    elif (
+        settings["model_name"] == quality_preset["model_name"]
+        and settings.get("embedding_model") == quality_preset["embedding_model"]
+        and settings["top_k"] == quality_preset["top_k"]
+        and settings["temperature"] == quality_preset["temperature"]
+        and settings["chunk_size"] == quality_preset["chunk_size"]
+    ):
+        default_mode = "Quality"
     else:
-        settings = get_system_settings()
+        default_mode = "Custom"
+
+    chunk_overlap = settings["chunk_overlap"]
+    is_admin_user = is_admin()
+    allowed_modes = ["Fast", "Balanced", "Quality", "Custom"] if is_admin_user else ["Fast", "Balanced", "Quality"]
+    perf_key = "settings_performance_mode"
+
+    if perf_key not in st.session_state or st.session_state[perf_key] not in allowed_modes:
+        st.session_state[perf_key] = default_mode if default_mode in allowed_modes else "Quality"
+
+    performance_mode = st.radio(
+        "Mode",
+        options=allowed_modes,
+        key=perf_key,
+        horizontal=True,
+    )
+
+    if performance_mode == "Fast":
+        selected_preset = fast_preset
+    elif performance_mode == "Balanced":
+        selected_preset = balanced_preset
+    elif performance_mode == "Quality":
+        selected_preset = quality_preset
+    else:
+        selected_preset = None
+
+    if selected_preset is not None:
         st.caption(
-            "Read-only. Admin only can edit performance/embedding settings."
+            f"LLM `{selected_preset['model_name']}` · Embed `{selected_preset['embedding_model']}` "
         )
-        st.write(
-            f"- LLM: `{settings['model_name']}`\n"
-            f"- Embedding: `{settings.get('embedding_model', DEFAULT_EMBEDDING_MODEL)}`\n"
-            f"- Top K: `{settings['top_k']}`\n"
-            f"- Temperature: `{settings['temperature']}`\n"
-            f"- Chunk Size: `{settings['chunk_size']}`"
+        st.caption(
+            f"TopK `{selected_preset['top_k']}` · Temp `{selected_preset['temperature']}` · Chunk `{selected_preset['chunk_size']}`"
         )
+        if st.button(f"Apply {performance_mode}", use_container_width=False):
+            save_system_settings(
+                selected_preset["model_name"],
+                selected_preset["embedding_model"],
+                selected_preset["top_k"],
+                selected_preset["temperature"],
+                selected_preset["chunk_size"],
+                chunk_overlap,
+            )
+            st.success(f"{performance_mode} profile applied")
+            st.rerun()
+
+    elif is_admin_user:
+        llm_model = st.selectbox(
+            "LLM Model",
+            options=MODEL_OPTIONS,
+            index=MODEL_OPTIONS.index(settings["model_name"]) if settings["model_name"] in MODEL_OPTIONS else 0,
+        )
+        embedding_model = st.selectbox(
+            "Embedding Model",
+            options=EMBEDDING_OPTIONS,
+            index=EMBEDDING_OPTIONS.index(settings.get("embedding_model", DEFAULT_EMBEDDING_MODEL))
+            if settings.get("embedding_model", DEFAULT_EMBEDDING_MODEL) in EMBEDDING_OPTIONS
+            else 0,
+        )
+        top_k = st.slider("Top K Chunks", 1, 10, settings["top_k"], key="settings_topk")
+        chunk_size = st.select_slider(
+            "Chunk Size (tokens)", [256, 512, 768, 1024], settings["chunk_size"], key="settings_chunk_size"
+        )
+        temperature = st.slider(
+            "Temperature", 0.0, 1.0, settings["temperature"], step=0.05, key="settings_temp"
+        )
+        if st.button("Save Custom", use_container_width=False):
+            save_system_settings(
+                llm_model,
+                embedding_model,
+                top_k,
+                temperature,
+                chunk_size,
+                chunk_overlap,
+            )
+            st.success("Custom settings saved")
+            st.rerun()
 
     st.markdown("#### Help")
     st.write("- Use **New Chat** in sidebar to start a fresh room with new files.")
@@ -803,6 +803,79 @@ def process_documents(
     )
 
 
+def _build_context_from_docs(docs: list, max_chars: int) -> str:
+    """Build bounded context text to keep generation latency predictable."""
+    pieces: list[str] = []
+    total_chars = 0
+    separator = "\n\n---\n\n"
+
+    for doc in docs:
+        raw_text = str(getattr(doc, "page_content", "") or "").strip()
+        if not raw_text:
+            continue
+
+        remaining = max_chars - total_chars
+        if remaining <= 0:
+            break
+
+        if len(raw_text) > remaining:
+            clipped = raw_text[:remaining].rstrip()
+            # Prefer ending at a word boundary for readability.
+            if " " in clipped and remaining > 80:
+                clipped = clipped.rsplit(" ", 1)[0].rstrip()
+            raw_text = clipped
+
+        if not raw_text:
+            continue
+
+        pieces.append(raw_text)
+        total_chars += len(raw_text)
+        if total_chars + len(separator) >= max_chars:
+            break
+
+    return separator.join(pieces)
+
+
+def _get_cached_chat_chain(model_name: str, temperature: float):
+    """Reuse chat chain across requests unless settings changed."""
+    cache_key = (model_name, float(temperature), OLLAMA_BASE_URL)
+    cached = st.session_state.get("chat_chain_cache")
+    if isinstance(cached, dict) and cached.get("key") == cache_key and cached.get("chain") is not None:
+        return cached["chain"]
+
+    chain = build_chat_chain_with_context(
+        model=model_name,
+        temperature=temperature,
+        base_url=OLLAMA_BASE_URL,
+    )
+    st.session_state.chat_chain_cache = {"key": cache_key, "chain": chain}
+    return chain
+
+
+def _get_cached_quiz_chain(model_name: str, temperature: float):
+    """Reuse quiz generation chain across requests unless settings changed."""
+    cache_key = (model_name, float(temperature), OLLAMA_BASE_URL)
+    cached = st.session_state.get("quiz_chain_cache")
+    if isinstance(cached, dict) and cached.get("key") == cache_key and cached.get("chain") is not None:
+        return cached["chain"]
+
+    chain = build_quiz_chain(model_name, temperature, OLLAMA_BASE_URL)
+    st.session_state.quiz_chain_cache = {"key": cache_key, "chain": chain}
+    return chain
+
+
+def _get_cached_eval_chain(model_name: str):
+    """Reuse answer evaluation chain across requests unless model changed."""
+    cache_key = (model_name, OLLAMA_BASE_URL)
+    cached = st.session_state.get("eval_chain_cache")
+    if isinstance(cached, dict) and cached.get("key") == cache_key and cached.get("chain") is not None:
+        return cached["chain"]
+
+    chain = build_eval_chain(model_name, OLLAMA_BASE_URL)
+    st.session_state.eval_chain_cache = {"key": cache_key, "chain": chain}
+    return chain
+
+
 # ---------------------------------------------------------------------------
 # Tab 1: Chat
 # ---------------------------------------------------------------------------
@@ -893,7 +966,7 @@ def chat_tab(model_name: str, temperature: float) -> None:
 
                 status.write("3) Building context from retrieved chunks…")
                 start_step = time.perf_counter()
-                context = "\n\n---\n\n".join(d.page_content for d in docs)
+                context = _build_context_from_docs(docs, max_chars=4200)
                 context_sec = time.perf_counter() - start_step
                 status.write(f"✓ Context prepared ({len(context)} chars) in {context_sec:.2f}s")
 
@@ -915,11 +988,7 @@ def chat_tab(model_name: str, temperature: float) -> None:
 
                 status.write(f"4) Generating final answer with `{model_name}`…")
                 start_step = time.perf_counter()
-                chain = build_chat_chain_with_context(
-                    model=model_name,
-                    temperature=temperature,
-                    base_url=OLLAMA_BASE_URL,
-                )
+                chain = _get_cached_chat_chain(model_name, temperature)
                 answer = chain.invoke({"context": context, "question": question})
                 generation_sec = time.perf_counter() - start_step
                 status.write(f"✓ Answer generated in {generation_sec:.2f}s")
@@ -1050,13 +1119,32 @@ def quiz_tab(model_name: str, temperature: float) -> None:
             parse_warning = "Could not parse questions. Try a different model or chunk size."
             try:
                 with st.spinner("Generating questions from document…"):
-                    docs = st.session_state.retriever.invoke(
-                        "key concepts main ideas important facts"
+                    retrieval_cache_key = (
+                        st.session_state.get("current_room_id"),
+                        id(st.session_state.get("retriever")),
+                        3200,
                     )
-                    context = "\n\n---\n\n".join(d.page_content for d in docs)
+                    cached_retrieval = st.session_state.get("quiz_retrieval_cache")
+                    if (
+                        isinstance(cached_retrieval, dict)
+                        and cached_retrieval.get("key") == retrieval_cache_key
+                        and isinstance(cached_retrieval.get("context"), str)
+                        and cached_retrieval.get("context")
+                    ):
+                        context = str(cached_retrieval["context"])
+                    else:
+                        docs = st.session_state.retriever.invoke(
+                            "key concepts main ideas important facts"
+                        )
+                        context = _build_context_from_docs(docs, max_chars=3200)
+                        st.session_state.quiz_retrieval_cache = {
+                            "key": retrieval_cache_key,
+                            "context": context,
+                        }
+
                     st.session_state.quiz_context = context
 
-                    chain = build_quiz_chain(model_name, temperature, OLLAMA_BASE_URL)
+                    chain = _get_cached_quiz_chain(model_name, temperature)
                     raw = chain.invoke(
                         {
                             "context": context,
@@ -1136,7 +1224,7 @@ def quiz_tab(model_name: str, temperature: float) -> None:
                 st.warning("Please write an answer before submitting.")
             else:
                 with st.spinner("Evaluating your answer…"):
-                    eval_chain = build_eval_chain(model_name, OLLAMA_BASE_URL)
+                    eval_chain = _get_cached_eval_chain(model_name)
                     feedback_raw = eval_chain.invoke({
                         "question": question_text,
                         "student_answer": student_answer,

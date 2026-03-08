@@ -4,3 +4,5 @@ __pycache__
 .env
 ollama_data/
 data/
+.vscode/
+.mcp.json
