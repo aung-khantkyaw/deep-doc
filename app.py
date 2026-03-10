@@ -46,6 +46,7 @@ from engine.llm_chain import (
     build_chat_chain_with_context,
     build_quiz_chain,
     build_eval_chain,
+    QUIZ_TEMPERATURE,
 )
 from utils.helpers import save_uploaded_file, display_chat_message, parse_quiz_questions
 
@@ -854,12 +855,13 @@ def _get_cached_chat_chain(model_name: str, temperature: float):
 
 def _get_cached_quiz_chain(model_name: str, temperature: float):
     """Reuse quiz generation chain across requests unless settings changed."""
-    cache_key = (model_name, float(temperature), OLLAMA_BASE_URL)
+    _ = temperature  # Quiz generation uses a task-specific temperature.
+    cache_key = (model_name, float(QUIZ_TEMPERATURE), OLLAMA_BASE_URL)
     cached = st.session_state.get("quiz_chain_cache")
     if isinstance(cached, dict) and cached.get("key") == cache_key and cached.get("chain") is not None:
         return cached["chain"]
 
-    chain = build_quiz_chain(model_name, temperature, OLLAMA_BASE_URL)
+    chain = build_quiz_chain(model_name, QUIZ_TEMPERATURE, OLLAMA_BASE_URL)
     st.session_state.quiz_chain_cache = {"key": cache_key, "chain": chain}
     return chain
 

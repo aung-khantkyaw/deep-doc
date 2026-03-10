@@ -8,6 +8,10 @@ from langchain_core.runnables import RunnablePassthrough
 from langchain_core.retrievers import BaseRetriever
 
 
+QUIZ_TEMPERATURE = 0.6
+EVAL_TEMPERATURE = 0.1
+
+
 def _format_docs(docs: list) -> str:
     return "\n\n---\n\n".join(d.page_content for d in docs)
 
@@ -135,8 +139,13 @@ Generate exactly {num_questions} questions in {quiz_type} format:"""
 
 
 def build_quiz_chain(model: str, temperature: float, base_url: str):
-    """Generate numbered study questions from a document context string."""
-    llm = _build_ollama_llm(model, temperature, base_url, task="quiz")
+    """Generate numbered study questions from a document context string.
+
+    Quiz generation intentionally uses a moderate temperature to avoid repetitive
+    question patterns across runs.
+    """
+    _ = temperature  # Keep signature stable for existing call sites.
+    llm = _build_ollama_llm(model, QUIZ_TEMPERATURE, base_url, task="quiz")
     return _QUIZ_PROMPT | llm | StrOutputParser()
 
 
@@ -145,37 +154,34 @@ def build_quiz_chain(model: str, temperature: float, base_url: str):
 # ---------------------------------------------------------------------------
 
 _EVAL_PROMPT = ChatPromptTemplate.from_template(
-    """You are a supportive teacher evaluating a student's answer.
+    """You are a supportive and detailed academic tutor. Your goal is to evaluate the student's answer and provide a clear path to the correct understanding.
 
 Question: {question}
-
 Student's Answer: {student_answer}
-
 Quiz Type: {quiz_type}
+Reference Material: {context}
 
-Reference material from the document:
-{context}
+Evaluation Criteria:
+1. Accuracy: Compare the student's answer with the provided context.
+2. Guidance: If the answer is wrong, clearly identify the correct choice and explain the reasoning based on the document.
 
-Return ONLY valid JSON with this exact schema:
+Return ONLY a JSON object with this exact schema:
 {{
-    "verdict": "Correct|Partially Correct|Incorrect",
-    "what_was_right": "string",
-    "what_missing_or_wrong": "string",
-    "complete_answer": "string",
-    "additional_feedback": "string"
+    "verdict": "Correct | Partially Correct | Incorrect",
+    "feedback": "A friendly explanation of why the answer is correct or why the specific option chosen was wrong. Mention the correct option clearly if the student was incorrect.",
+    "correct_answer": "The specific correct option and the factual statement from the text.",
+    "key_points_missed": ["point 1", "point 2"],
+    "reference_quote": "The exact sentence from the document that proves the correct answer."
 }}
 
 Rules:
-- Always include all five keys.
-- For Multiple Choice and True/False:
-    - If verdict is Correct: keep "what_missing_or_wrong" and "complete_answer" as empty string.
-    - If verdict is Partially Correct or Incorrect: include "what_missing_or_wrong"; "complete_answer" can be empty.
-- Keep responses concise and grounded in the reference material.
+- If the student is incorrect, do not just say "Wrong". Explain: "Option X is correct because [reason from text], whereas your choice refers to [reason why user's choice was wrong]."
+- Always stay encouraging. Use phrases like "Good try! However..." or "You're close, but the document mentions...".
 """
 )
 
 
 def build_eval_chain(model: str, base_url: str):
     """Evaluate a student's answer against the document context."""
-    llm = _build_ollama_llm(model, 0.1, base_url, task="eval")
+    llm = _build_ollama_llm(model, EVAL_TEMPERATURE, base_url, task="eval")
     return _EVAL_PROMPT | llm | StrOutputParser()
